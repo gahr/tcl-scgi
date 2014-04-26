@@ -310,8 +310,8 @@ namespace eval ::scgi:: {
             }
             dincr cdata $sock:status
 
-            dset  cdata $sock:hbeg [expr {[lindex $colIdx 1] + 1}]
-            dset  cdata $sock:hlen [string range [dget $cdata $sock:data] 0 [lindex $lenIdx 1]]
+            dset cdata $sock:hbeg [expr {[lindex $colIdx 1] + 1}]
+            dset cdata $sock:hlen [string range [dget $cdata $sock:data] 0 [lindex $lenIdx 1]]
             tailcall [dget [info frame 0] proc] $sock
         }
 
@@ -332,8 +332,8 @@ namespace eval ::scgi:: {
             foreach {k v} $head {
                 lappend hlist [string toupper $k] $v
             }
-            dset cdata $sock:head  $hlist
-            dset cdata $sock:bbeg  [expr {$hend + 2}] ; # skip the comma
+            dset cdata $sock:head $hlist
+            dset cdata $sock:bbeg [expr {$hend + 2}] ; # skip the comma
             tailcall [dget [info frame 0] proc] $sock
         }
 
@@ -342,12 +342,19 @@ namespace eval ::scgi:: {
             dincr cdata $sock:status
 
             # headers have been read, check Content-length
-            if {![string is entier [dset cdata $sock:blen [dget? $cdata $sock:head CONTENT_LENGTH]]]} {
+            dset cdata $sock:blen [dget? $cdata $sock:head CONTENT_LENGTH]
+            if {![string is entier [dget $cdata $sock:blen]]} {
                 dset cdata $sock:blen 0
             }
 
             # if there's no body, just go on and handle the request (mostly, a shortcut for GETs)
-            if {[dget $cdata $sock:blen] != 0 && [string length [dget $cdata $sock:data]] < [dget $cdata $sock:bbeg] + [dget $cdata $sock:blen]} {
+            if {[dget $cdata $sock:blen] == 0} {
+                handle_request $sock
+                return
+            }
+
+            # if the body is not fully read, return and wait for the next read event
+            if {[string length [dget $cdata $sock:data]] < [dget $cdata $sock:hlen] + [dget $cdata $sock:hbeg] + [dget $cdata $sock:blen]} {
                 return
             }
 
@@ -374,7 +381,7 @@ namespace eval ::scgi:: {
         ::thread::send $tid [list set sock  $sock]
         ::thread::send $tid [list set conf  $conf]
         ::thread::send $tid [list set head  [dget $cdata $sock:head]]
-        ::thread::send $tid [list set body  [string range [dget $cdata $sock:data] [dget $cdata $sock:bbeg] [dget $cdata $sock:blen]]]
+        ::thread::send $tid [list set body  [string range [dget $cdata $sock:data] [expr {[dget $cdata $sock:bbeg] - 1}] [expr {[dget $cdata $sock:bbeg] -1 + [dget $cdata $sock:blen]}]]]
 
         ::thread::send -async $tid {
 
@@ -403,40 +410,45 @@ namespace eval ::scgi:: {
                     set in_body $::body
 
                     # decode the parameters (might be in both query string and body)
-                    set plist {}
-                    lappend plist [dget? $in_head QUERY_STRING]
+                    set plist [dget? $in_head QUERY_STRING]
                     if {[dexists $in_head HTTP_CONTENT_TYPE] && [dget $in_head HTTP_CONTENT_TYPE] eq {application/x-www-form-urlencoded}} {
                         lappend plist $in_body
                     }
+
                     foreach {k v} [split $plist {& =}] {
                         lappend in_params [::scgi_handler::decode $k] [::scgi_handler::decode $v]
                     }
 
                     # locate the Tcl script to execute
                     set droot [dget? $in_head DOCUMENT_ROOT]
+                    set duri  [regsub {^/} [dget? $in_head DOCUMENT_URI] {}]
                     set sname [regsub {^/} [dget? $in_head SCRIPT_NAME] {}]
                     set pinfo [regsub {^/} [dget? $in_head PATH_INFO] {}]
 
-                    if {$sname eq {}} {
-                        set sname index.tcl
-                    }
-
                     # If no script_path (-s) argument was provided, use DOCUMENT_ROOT
-                    # as a base. Then append SCRIPT_NAME. If the resulting path is
-                    # a readable file, use that. Else, try to append PATH_INFO.
+                    # as a base. Then try to append, in order:
+                    # - DOCUMENT_URI
+                    # - SCRIPT_NAME
+                    # - PATH_INFO
+                    # - index.tcl
                     set script [dget? $::conf script_path]
                     if {$script eq {}} {
                         set script $droot
                     }
-                    set script [file join $script $sname]
 
-                    if {![file isfile $script] || ![file exists $script] || ![file readable $script]} {
-                        set script [file join $script $pinfo]
-                        if {![file isfile $script] || ![file exists $script] || ![file readable $script]} {
-                            ::scgi_handler::header Status {404 Not found}
-                            ::scgi_handler::puts "Could not find $script on the server"
-                            ::scgi_handler::finalize
+                    set sfound 0
+                    foreach trial [list $duri $sname $pinfo index.tcl] {
+                        set script [file join $script $trial]
+                        if {[file isfile $script] && [file exists $script] && [file readable $script]} {
+                            set sfound 1
+                            break
                         }
+                    }
+
+                    if {!$sfound} {
+                        ::scgi_handler::header Status {404 Not found}
+                        ::scgi_handler::puts "Could not find $script on the server"
+                        ::scgi_handler::finalize
                     }
 
                     set int [interp create]
