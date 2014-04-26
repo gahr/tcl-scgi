@@ -420,7 +420,9 @@ namespace eval ::scgi:: {
                     # decode the parameters (might be in both query string and body)
                     set plist [dget? $in_head QUERY_STRING]
                     if {[dexists $in_head HTTP_CONTENT_TYPE] && [dget $in_head HTTP_CONTENT_TYPE] eq {application/x-www-form-urlencoded}} {
-                        lappend plist $in_body
+                        if {$in_body ne {}} {
+                            lappend plist $in_body
+                        }
                     }
 
                     foreach {k v} [split $plist {& =}] {
