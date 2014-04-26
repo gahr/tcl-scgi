@@ -31,6 +31,10 @@
 #
 # The handler can be invoked with the following arguments:
 #
+# -c chdir
+#
+#    Location where to chdir before starting to serve requests.
+#
 # -m max_threads
 #
 #    Maximum number of threads that can be handling requests
@@ -171,6 +175,12 @@ namespace eval ::scgi:: {
 
         for {set i 0} {$i < $argc} {incr i} {
             switch [lindex $argv $i] {
+                -c {
+                    set d [lindex $argv [incr i]]
+                    if {[file isdirectory $d] && [file readable $d]} {
+                        cd $d
+                    }
+                }
                 -m {
                     dset conf max_threads [lindex $argv [incr i]]
                 }
@@ -225,11 +235,7 @@ namespace eval ::scgi:: {
 
         catch {chan close $sock}
         set cdata [dict filter $cdata script {k v} {
-            if {[string match $sock:* $k]} {
-                return 0
-            } else {
-                return 1
-            }
+            expr {[string match $sock:* $k] == 0}
         }]
     }
 
@@ -350,6 +356,7 @@ namespace eval ::scgi:: {
             # if there's no body, just go on and handle the request (mostly, a shortcut for GETs)
             if {[dget $cdata $sock:blen] == 0} {
                 handle_request $sock
+                cleanup $sock
                 return
             }
 
@@ -360,6 +367,7 @@ namespace eval ::scgi:: {
 
             after cancel [dget? $cdata $sock,afterid]
             handle_request $sock
+            cleanup $sock
         }
     }
 
@@ -614,7 +622,6 @@ namespace eval ::scgi:: {
         }
     }
 }
-
 
 ::scgi::parse_args
 ::scgi::serve
