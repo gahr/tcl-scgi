@@ -31,6 +31,10 @@
 #
 # The handler can be invoked with the following arguments:
 #
+# -a addr
+#
+#    Listen on the specified IP address.
+#
 # -c chdir
 #
 #    Location where to chdir before starting to serve requests.
@@ -169,6 +173,7 @@ namespace eval ::scgi:: {
             max_threads  50
             script_path  {}
             timeout      -1
+            addr         127.0.0.1
             port         4000
             verbose      false
         }
@@ -180,6 +185,9 @@ namespace eval ::scgi:: {
                     if {[file isdirectory $d] && [file readable $d]} {
                         cd $d
                     }
+                }
+                -a {
+                    dset conf addr [lindex $argv [incr i]]
                 }
                 -m {
                     dset conf max_threads [lindex $argv [incr i]]
@@ -222,7 +230,7 @@ namespace eval ::scgi:: {
     # Server socket.
     proc serve {} {
         variable conf
-        socket -server [namespace code handle_connect] [dget $conf port]
+        socket -server [namespace code handle_connect] -myaddr [dget $conf addr] [dget $conf port]
     }
 
     ##
@@ -395,7 +403,7 @@ namespace eval ::scgi:: {
 
             eval $dhelpers
 
-            namespace eval ::scgi_handler:: {
+            namespace eval ::scgi:: {
 
                 variable in_head    {}
                 variable in_body    {}
@@ -426,7 +434,7 @@ namespace eval ::scgi:: {
                     }
 
                     foreach {k v} [split $plist {& =}] {
-                        lappend in_params [::scgi_handler::decode $k] [::scgi_handler::decode $v]
+                        lappend in_params [::scgi::decode $k] [::scgi::decode $v]
                     }
 
                     # locate the Tcl script to execute
@@ -456,23 +464,23 @@ namespace eval ::scgi:: {
                     }
 
                     if {!$sfound} {
-                        ::scgi_handler::header Status {404 Not found}
-                        ::scgi_handler::puts "Could not find $script on the server"
-                        ::scgi_handler::finalize
+                        ::scgi::header Status {404 Not found}
+                        ::scgi::puts "Could not find $script on the server"
+                        ::scgi::finalize
                     }
 
                     set int [interp create]
 
                     # Setup aliases in the ::scgi::namespace
-                    interp alias $int ::scgi::header   {} ::scgi_handler::header
-                    interp alias $int ::scgi::puts     {} ::scgi_handler::puts
-                    interp alias $int ::scgi::flush    {} ::scgi_handler::flush
-                    interp alias $int ::scgi::req_head {} ::scgi_handler::req_head
-                    interp alias $int ::scgi::req_body {} ::scgi_handler::req_body
-                    interp alias $int ::scgi::param    {} ::scgi_handler::param
-                    interp alias $int ::scgi::params   {} ::scgi_handler::params
-                    interp alias $int ::scgi::exit     {} ::scgi_handler::finalize
-                    interp alias $int exit             {} ::scgi_handler::finalize
+                    interp alias $int ::scgi::header   {} ::scgi::header
+                    interp alias $int ::scgi::puts     {} ::scgi::puts
+                    interp alias $int ::scgi::flush    {} ::scgi::flush
+                    interp alias $int ::scgi::req_head {} ::scgi::req_head
+                    interp alias $int ::scgi::req_body {} ::scgi::req_body
+                    interp alias $int ::scgi::param    {} ::scgi::param
+                    interp alias $int ::scgi::params   {} ::scgi::params
+                    interp alias $int ::scgi::exit     {} ::scgi::finalize
+                    interp alias $int exit             {} ::scgi::finalize
 
                     # Close the standard I/O channels
                     interp eval $int chan close stdin
@@ -481,10 +489,10 @@ namespace eval ::scgi:: {
 
                     # Source the script in the slave interpreter
                     if {[catch {interp eval $int source $script} err]} {
-                        ::scgi_handler::header Status {500 Internal server error}
-                        ::scgi_handler::puts $::errorInfo
+                        ::scgi::header Status {500 Internal server error}
+                        ::scgi::puts $::errorInfo
                     } else {
-                        ::scgi_handler::header Status {200 OK}
+                        ::scgi::header Status {200 OK}
                     }
 
                     finalize
@@ -570,7 +578,7 @@ namespace eval ::scgi:: {
                     if {$flushed} {
                         error "Data have already been flushed"
                     }
-                    append out_body $data
+                    append out_body [subst -nobackslashes -novariables $data]
                 }
 
                 ##
@@ -620,7 +628,7 @@ namespace eval ::scgi:: {
                 }
             }
             
-            ::scgi_handler::handle
+            ::scgi::handle
         }
     }
 }
