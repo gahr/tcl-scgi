@@ -473,7 +473,7 @@ namespace eval ::scgi:: {
 
                     # Setup aliases in the ::scgi::namespace
                     interp alias $int ::scgi::header   {} ::scgi::header
-                    interp alias $int ::scgi::puts     {} ::scgi::puts
+                    interp alias $int @                {} ::scgi::puts
                     interp alias $int ::scgi::flush    {} ::scgi::flush
                     interp alias $int ::scgi::req_head {} ::scgi::req_head
                     interp alias $int ::scgi::req_body {} ::scgi::req_body
@@ -578,7 +578,7 @@ namespace eval ::scgi:: {
                     if {$flushed} {
                         error "Data have already been flushed"
                     }
-                    append out_body [subst -nobackslashes -novariables $data]
+                    append out_body $data
                 }
 
                 ##
