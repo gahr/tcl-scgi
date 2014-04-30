@@ -583,7 +583,8 @@ namespace eval ::scgi:: {
 
                 ##
                 # Flush any output (headers and body) waiting
-                # on the output buffer
+                # on the output buffer. If we get here, at least
+                # the Status header has been set.
                 proc flush {} {
                     variable out_head
                     variable out_body
@@ -593,13 +594,9 @@ namespace eval ::scgi:: {
                         return
                     }
 
-                    if {$out_head eq {} && $out_body eq {}} {
-                        return
-                    }
-
                     set out {}
 
-                    # Set the content-type, if not set yet
+                    # Set Content-type, if not set yet
                     header Content-type {text/html} false
 
                     # Output the headers
@@ -608,9 +605,7 @@ namespace eval ::scgi:: {
                     }
 
                     # Output the body
-                    if {$out_body ne {}} {
-                        append out "\n$out_body"
-                    }
+                    append out "\n$out_body"
 
                     # Flush
                     ::puts -nonewline $::sock $out
