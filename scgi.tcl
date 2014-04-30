@@ -517,8 +517,10 @@ namespace eval ::scgi:: {
                     set out {}
 
                     # Set Status and Content-type, if not set yet
-                    header Content-type {text/html} false
                     header Status {200} false
+                    header Content-type {text/html} false
+                    # take into account the extra <cr> <lf> between headers and body
+                    header Content-length [expr {[string bytelength $out_body] + 2}]
 
                     # Output the headers
                     foreach {k v} $out_head {
