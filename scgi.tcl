@@ -160,6 +160,7 @@ namespace eval ::scgi:: {
 
         log $sock cleanup
 
+        after cancel [dget? $cdata $sock,afterid]
         catch {chan close $sock}
         set cdata [dict filter $cdata script {k v} {
             expr {[string match $sock:* $k] == 0}
