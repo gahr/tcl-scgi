@@ -105,12 +105,6 @@ namespace eval ::scgi:: {
 
         for {set i 0} {$i < $argc} {incr i} {
             switch [lindex $argv $i] {
-                -c {
-                    set d [lindex $argv [incr i]]
-                    if {[file isdirectory $d] && [file readable $d]} {
-                        cd $d
-                    }
-                }
                 -a {
                     dset conf addr [lindex $argv [incr i]]
                 }
@@ -411,6 +405,9 @@ namespace eval ::scgi:: {
                     interp eval $int chan close stdin
                     interp eval $int chan close stdout
                     interp eval $int chan close stderr
+
+                    # Go into the directory where the script is
+                    interp eval $int cd [file normalize [file dirname $script]]
 
                     # Source the script in the slave interpreter
                     if {[catch {interp eval $int source $script} err]} {
