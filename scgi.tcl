@@ -75,7 +75,7 @@ namespace eval ::scgi:: {
     # - status  0: connection established, reading the header length
     #           1: reading the header
     #           2: reading the body
-    #           3: dispatched
+    #           3: handling the request
     #
     # - data    data read up to now
     # - hbeg    beginning of the headers (after the len of the netstring)
@@ -273,29 +273,26 @@ namespace eval ::scgi:: {
 
         if {[dget $cdata $sock:status] == 2} {
             log $sock "handle_read 2"
-            dincr cdata $sock:status
 
-            # headers have been read, check Content-length
+            # headers have been read, check Content-length. If not set, 
+            # assume 0.
             dset cdata $sock:blen [dget? $cdata $sock:head CONTENT_LENGTH]
             if {![string is entier [dget $cdata $sock:blen]]} {
                 dset cdata $sock:blen 0
             }
 
-            # if there's no body, just go on and handle the request (mostly, a shortcut for GETs)
-            if {[dget $cdata $sock:blen] == 0} {
+            # the request is ready to be handled if
+            # - there is no body at all, or
+            # - the expected data length equals the actual data length
+            set noBody [expr {[dget $cdata $sock:blen] == 0}]
+            set expLen [expr {[dget $cdata $sock:hlen] + [dget $cdata $sock:hbeg] + [dget $cdata $sock:blen] + 1}] ;# +1 for the comma
+            set actLen [string length [dget $cdata $sock:data]]
+
+            if {$noBody || $expLen == $actLen} {
+                dincr cdata $sock:status
                 handle_request $sock
-                cleanup $sock
-                return
             }
 
-            # if the body is not fully read, return and wait for the next read event
-            if {[string length [dget $cdata $sock:data]] < [dget $cdata $sock:hlen] + [dget $cdata $sock:hbeg] + [dget $cdata $sock:blen]} {
-                return
-            }
-
-            after cancel [dget? $cdata $sock,afterid]
-            handle_request $sock
-            cleanup $sock
         }
     }
 
@@ -310,6 +307,9 @@ namespace eval ::scgi:: {
 
         # we can't read from the socket once we begin serving the request
         chan event $sock r {}
+
+        # no need for a timeout anymore
+        after cancel [dget? $cdata $sock,afterid]
 
         set tid [::thread::create]
         ::thread::transfer $tid $sock
@@ -546,6 +546,7 @@ namespace eval ::scgi:: {
             }
             
             ::scgi::handle
+            cleanup $sock
         }
     }
 }
