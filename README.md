@@ -45,14 +45,11 @@ User scripts can use the following procs:
     (the default), a previous header with the same key is replaced by the
     one specified.
 
-    ::scgi::puts data
-
-    Append the data to the output buffer. No new-line is automatically appended to the data.
-     
     ::scgi::flush
 
-    Send the output buffered (including headers and body data) to the client. Once called, 
-    no further output is possible.
+    Send the output buffered (including headers and body data) to the client and
+    close the connection. Once called, no further output is possible, but the script
+    stays alive and can continue processing data. 
 
     ::scgi::params
 
