@@ -31,6 +31,14 @@ The scgi.tcl software requires Tcl 8.6 and the Thread extension.
 
 User scripts can use the following procs:
 
+    @ " text text [command arg1 arg2] $var1 $var2 \n more text"
+
+    Append its argument, evaluated by Tcl, to the output buffer.
+
+    @ { pure html text }
+
+    Append its argument, not evaluated by Tcl, to the output buffer.
+
     ::scgi::header key value ?replace?
 
     Append the header "Key: value" to the output buffer. If replace is true
