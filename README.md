@@ -6,9 +6,6 @@ Each request is first parsed by the main thread then dispatched to be served by 
 
 The handler can be invoked with the following arguments:
 
-    -c dir
-    Change working directory into dir before starting serving requests.
-
     -m max_threads
     Maximum number of threads that can be handling requests at any given time.
     
