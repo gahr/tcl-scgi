@@ -490,7 +490,7 @@ namespace eval ::scgi:: {
                     # Source the script in the slave interpreter
                     if {[catch {interp eval $int source $script} err]} {
                         ::scgi::header Status {500 Internal server error}
-                        ::scgi::puts $::errorInfo
+                        ::scgi::puts <pre>$::errorInfo</pre>
                     } else {
                         ::scgi::header Status {200 OK}
                     }
