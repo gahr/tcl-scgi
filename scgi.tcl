@@ -554,7 +554,7 @@ namespace eval ::scgi:: {
 
 ::scgi::parse_args
 ::scgi::serve
-vwait _forevert
+vwait _forever
 
 ##
 # TODO
