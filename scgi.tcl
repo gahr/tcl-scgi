@@ -491,8 +491,6 @@ namespace eval ::scgi:: {
                     if {[catch {interp eval $int source $script} err]} {
                         ::scgi::header Status {500 Internal server error}
                         ::scgi::puts <pre>$::errorInfo</pre>
-                    } else {
-                        ::scgi::header Status {200 OK}
                     }
 
                     finalize
@@ -575,10 +573,9 @@ namespace eval ::scgi:: {
                 proc puts {data} {
                     variable out_body
                     variable flushed
-                    if {$flushed} {
-                        error "Data have already been flushed"
+                    if {!$flushed} {
+                        append out_body $data
                     }
-                    append out_body $data
                 }
 
                 ##
@@ -596,8 +593,9 @@ namespace eval ::scgi:: {
 
                     set out {}
 
-                    # Set Content-type, if not set yet
+                    # Set Status and Content-type, if not set yet
                     header Content-type {text/html} false
+                    header Status {200} false
 
                     # Output the headers
                     foreach {k v} $out_head {
@@ -611,6 +609,8 @@ namespace eval ::scgi:: {
                     ::puts -nonewline $::sock $out
 
                     set flushed 1
+
+                    catch {close $::sock}
                 }
 
                 ##
@@ -618,7 +618,6 @@ namespace eval ::scgi:: {
                 # on the output buffer and terminate
                 proc finalize {} {
                     flush
-                    close $::sock
                     ::thread::exit
                 }
             }
