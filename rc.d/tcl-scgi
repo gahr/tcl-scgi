@@ -1,0 +1,54 @@
+#!/bin/sh
+
+# PROVIDE: tcl-scgi
+# REQUIRE: login
+# KEYWORD: shutdown
+
+#
+# Add the following line to /etc/rc.conf to enable tcl-scgi:
+# tcl_scgi_enable="YES"
+# 
+# Additionally, startup flags might be defined as follows:
+# tcl_scgi_flags="-a 127.0.0.1 -p 9100"
+#
+
+. /etc/rc.subr
+
+name="tcl_scgi"
+rcvar=tcl_scgi_enable
+
+load_rc_config "$name"
+
+command="/usr/local/www/scgi.tcl"
+command_interpreter="/usr/local/bin/tclsh8.6"
+pidfile="/var/run/tcl-scgi.pid"
+start_cmd="tcl_scgi_start"
+stop_cmd="tcl_scgi_stop"
+
+tcl_scgi_start()
+{
+    check_startmsgs && echo -n "Starting $name"
+    $command $tcl_scgi_flags -f > $pidfile
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
+
+    check_startmsgs && echo "."
+    return 0
+}
+
+tcl_scgi_stop()
+{
+    pid=$(check_pidfile $pidfile $command $command_interpreter)
+    if [ -z "$pid" ]; then
+        [ -n "$rc_fast" ] && return 0
+        echo "$name not running? (check $pidfile)."
+        return 1
+    fi
+    echo -n "Stopping $name"
+    kill ${pid}
+    rm -f $pidfile
+    echo "."
+}
+
+run_rc_command "$1"
