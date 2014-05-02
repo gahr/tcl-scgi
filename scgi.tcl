@@ -1,4 +1,4 @@
-#!/usr/bin/env tclsh
+#!/usr/local/bin/tclsh8.6
 
 #
 #  Copyright (C) 2013, 2014 Pietro Cerutti <gahr@gahr.ch>
@@ -31,6 +31,8 @@
 # first parsed by the main thread then dispatched to be served by a dedicated
 # thread.  The scgi.tcl software requires Tcl 8.6 and the Thread extension.
 #
+# The SCGI specification is here: http://www.python.ca/scgi/protocol.txt .
+#
 # See README.md for documentation.
 #
 
@@ -44,11 +46,10 @@ set dhelpers {
     # http://wiki.tcl.tk/22807
     proc ::tcl::dict::get? {args} {
         try {
-            ::set x [dict get {*}$args]
+            return [dict get {*}$args]
         } on error message {
-            ::set x {}
+            return {}
         }
-        return $x
     }
     namespace ensemble configure dict -map [dict merge [namespace ensemble configure dict -map] {get? ::tcl::dict::get?}]
 
@@ -66,6 +67,12 @@ namespace eval ::scgi:: {
     ##
     # Configuration options
     variable conf {}
+
+    ##
+    # TSV
+    tsv::set tsv mutex [thread::mutex create]
+    tsv::set tsv nextOne [thread::cond create] 
+    tsv::set tsv nofThreads 0
 
     ##
     # Data of each connection is kept in this dictionary. Each key is
@@ -86,12 +93,22 @@ namespace eval ::scgi:: {
     # - afterid id used for the connection timeout
     variable cdata {}
 
+    # if needed, fork and print child pid
+    proc fork {} {
+        set fork [lsearch -exact $::argv -f]
+        if {$fork != -1} {
+            set args [lreplace $::argv $fork $fork]
+            set child [open "|[info nameofexecutable] [file normalize [info script]] $args" r]
+            puts [pid $child]
+            exit 0
+        }
+    }
+
     ##
     # Parse command line arguments
     #
     proc parse_args {} {
         variable conf
-        upvar #0 argc argc argv argv
 
         # Initialize with default values
         set conf {
@@ -103,22 +120,22 @@ namespace eval ::scgi:: {
             verbose      false
         }
 
-        for {set i 0} {$i < $argc} {incr i} {
-            switch [lindex $argv $i] {
+        for {set i 0} {$i < $::argc} {incr i} {
+            switch [lindex $::argv $i] {
                 -a {
-                    dset conf addr [lindex $argv [incr i]]
+                    dset conf addr [lindex $::argv [incr i]]
                 }
                 -m {
-                    dset conf max_threads [lindex $argv [incr i]]
+                    dset conf max_threads [lindex $::argv [incr i]]
                 }
                 -p {
-                    dset conf port [lindex $argv [incr i]]
+                    dset conf port [lindex $::argv [incr i]]
                 }
                 -s {
-                    dset conf script_path [lindex $argv [incr i]]
+                    dset conf script_path [lindex $::argv [incr i]]
                 }
                 -t {
-                    set t [lindex $argv [incr i]]
+                    set t [lindex $::argv [incr i]]
                     if {![string is entier $t]} {
                         error "timeout must be an integer: $t given."
                     }
@@ -128,7 +145,7 @@ namespace eval ::scgi:: {
                     dset conf verbose true
                 }
                 default {
-                    error "Unhandled argument: [lindex $argv $i]"
+                    error "Unhandled argument: [lindex $::argv $i]"
                 }
             }
         }
@@ -274,11 +291,12 @@ namespace eval ::scgi:: {
         if {[dget $cdata $sock:status] == 2} {
             log $sock "handle_read 2"
 
-            # headers have been read, check Content-length. If not set, 
-            # assume 0.
+            # headers have been read, check CONTENT_LENGTH. According to
+            # the specification of the SCGI protocol, this header must
+            # always be present, even if it's 0.
             dset cdata $sock:blen [dget? $cdata $sock:head CONTENT_LENGTH]
             if {![string is entier [dget $cdata $sock:blen]]} {
-                dset cdata $sock:blen 0
+                hangup $sock
             }
 
             # the request is ready to be handled if
@@ -292,7 +310,6 @@ namespace eval ::scgi:: {
                 dincr cdata $sock:status
                 handle_request $sock
             }
-
         }
     }
 
@@ -311,15 +328,24 @@ namespace eval ::scgi:: {
         # no need for a timeout anymore
         after cancel [dget? $cdata $sock,afterid]
 
-        set tid [::thread::create]
-        ::thread::transfer $tid $sock
-        ::thread::send $tid [list set dhelpers $::dhelpers]
-        ::thread::send $tid [list set sock  $sock]
-        ::thread::send $tid [list set conf  $conf]
-        ::thread::send $tid [list set head  [dget $cdata $sock:head]]
-        ::thread::send $tid [list set body  [string range [dget $cdata $sock:data] [expr {[dget $cdata $sock:bbeg] - 1}] [expr {[dget $cdata $sock:bbeg] -1 + [dget $cdata $sock:blen]}]]]
+        # wait for a thread to become available
+        thread::mutex lock [tsv::get tsv mutex]
+        while {[tsv::get tsv nofThreads] >= [dget $conf max_threads]} {
+            thread::cond wait [tsv::get tsv nextOne] [tsv::get tsv mutex]
+        }
+        tsv::incr tsv nofThreads
+        thread::mutex unlock [tsv::get tsv mutex]
+        
+        # craete the worker
+        set tid [thread::create]
+        thread::transfer $tid $sock
+        thread::send $tid [list set dhelpers $::dhelpers]
+        thread::send $tid [list set sock  $sock]
+        thread::send $tid [list set conf  $conf]
+        thread::send $tid [list set head  [dget $cdata $sock:head]]
+        thread::send $tid [list set body  [string range [dget $cdata $sock:data] [expr {[dget $cdata $sock:bbeg] - 1}] [expr {[dget $cdata $sock:bbeg] -1 + [dget $cdata $sock:blen]}]]]
 
-        ::thread::send -async $tid {
+        thread::send -async $tid {
 
             eval $dhelpers
 
@@ -543,21 +569,19 @@ namespace eval ::scgi:: {
                 # on the output buffer and terminate
                 proc finalize {} {
                     flush
-                    ::thread::exit
+                    tsv::incr tsv nofThreads -1
+                    thread::cond notify [tsv::get tsv nextOne]
+                    thread::exit
                 }
             }
             
             ::scgi::handle
-            cleanup $sock
         }
+        cleanup $sock
     }
 }
 
+::scgi::fork ;# doesn't return if forked
 ::scgi::parse_args
 ::scgi::serve
 vwait _forever
-
-##
-# TODO
-# 
-# - Use a thread pool and the -m argument
