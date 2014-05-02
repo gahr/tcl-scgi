@@ -6,6 +6,9 @@ Each request is first parsed by the main thread then dispatched to be served by 
 
 The handler can be invoked with the following arguments:
 
+    -f
+    Fork and return the pid of the child process. Useful in startup scripts.
+
     -m max_threads
     Maximum number of threads that can be handling requests at any given time.
     
