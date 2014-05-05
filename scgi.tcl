@@ -69,10 +69,10 @@ namespace eval ::scgi:: {
     variable conf {}
 
     ##
-    # TSV
+    variable nofThreads  0
+    tsv::set tsv freeThreads [list]
     tsv::set tsv mutex [thread::mutex create]
-    tsv::set tsv nextOne [thread::cond create] 
-    tsv::set tsv nofThreads 0
+    tsv::set tsv cond [thread::cond create]
 
     ##
     # Data of each connection is kept in this dictionary. Each key is
@@ -102,6 +102,36 @@ namespace eval ::scgi:: {
             puts [pid $child]
             exit 0
         }
+    }
+
+    ##
+    # Get a free thread by creating up to max_threads. If none is available,
+    # wait until one is fed back to the the free threads list.
+    #
+    proc get_thread {} {
+        variable conf
+        variable nofThreads
+
+        # create a new thread
+        if {$nofThreads < [dget $conf max_threads]} {
+            set tid [thread::create]
+            thread::preserve $tid
+            incr nofThreads
+            return $tid
+        }
+
+        # if there's no free threads, wait
+        thread::mutex lock [tsv::get tsv mutex]
+        while {[tsv::llength tsv freeThreads] == 0} {
+            thread::cond wait [tsv::get tsv cond] [tsv::get tsv mutex]
+        }
+        thread::mutex unlock [tsv::get tsv mutex]
+        #tsv::lock tsv {
+            set tid [tsv::lindex tsv freeThreads end]
+            tsv::lpop tsv freeThreads end
+        #}
+
+        return $tid
     }
 
     ##
@@ -328,16 +358,10 @@ namespace eval ::scgi:: {
         # no need for a timeout anymore
         after cancel [dget? $cdata $sock,afterid]
 
-        # wait for a thread to become available
-        thread::mutex lock [tsv::get tsv mutex]
-        while {[tsv::get tsv nofThreads] >= [dget $conf max_threads]} {
-            thread::cond wait [tsv::get tsv nextOne] [tsv::get tsv mutex]
-        }
-        tsv::incr tsv nofThreads
-        thread::mutex unlock [tsv::get tsv mutex]
+        # get a free thread (might wait)
+        set tid [get_thread]
         
-        # craete the worker
-        set tid [thread::create]
+        # set up the worker thread
         thread::transfer $tid $sock
         thread::send $tid [list set dhelpers $::dhelpers]
         thread::send $tid [list set sock  $sock]
@@ -413,6 +437,7 @@ namespace eval ::scgi:: {
                         ::scgi::header Status {404 Not found}
                         ::scgi::puts "Could not find $script on the server"
                         ::scgi::finalize
+                        return
                     }
 
                     set int [interp create]
@@ -545,8 +570,7 @@ namespace eval ::scgi:: {
                     # Set Status and Content-type, if not set yet
                     header Status {200} false
                     header Content-type {text/html} false
-                    # take into account the extra <cr> <lf> between headers and body
-                    header Content-length [expr {[string bytelength $out_body] + 2}]
+                    header Content-length [expr {[string bytelength $out_body]}]
 
                     # Output the headers
                     foreach {k v} $out_head {
@@ -569,13 +593,13 @@ namespace eval ::scgi:: {
                 # on the output buffer and terminate
                 proc finalize {} {
                     flush
-                    tsv::incr tsv nofThreads -1
-                    thread::cond notify [tsv::get tsv nextOne]
-                    thread::exit
                 }
             }
             
             ::scgi::handle
+
+            tsv::lappend tsv freeThreads [thread::id]
+            thread::cond notify [tsv::get tsv cond]
         }
         cleanup $sock
     }
