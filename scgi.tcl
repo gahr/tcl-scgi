@@ -207,7 +207,7 @@ namespace eval ::scgi:: {
 
         log $sock cleanup
 
-        after cancel [dget? $cdata $sock,afterid]
+        after cancel [dget? $cdata $sock:afterid]
         catch {chan close $sock}
         set cdata [dict filter $cdata script {k v} {
             expr {[string match $sock:* $k] == 0}
@@ -227,8 +227,8 @@ namespace eval ::scgi:: {
             return
         }
 
-        after cancel [dget? $cdata $sock,afterid]
-        dset cdata $sock,afterid [after $t [namespace code [list hangup $sock]]]
+        after cancel [dget? $cdata $sock:afterid]
+        dset cdata $sock:afterid [after $t [namespace code [list hangup $sock]]]
     }
 
     ##
@@ -356,7 +356,7 @@ namespace eval ::scgi:: {
         chan event $sock r {}
 
         # no need for a timeout anymore
-        after cancel [dget? $cdata $sock,afterid]
+        after cancel [dget? $cdata $sock:afterid]
 
         # get a free thread (might wait)
         set tid [get_thread]
