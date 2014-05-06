@@ -57,7 +57,7 @@ The scgi.tcl software requires Tcl 8.6 and the Thread extension.
 
 User scripts consist of pure HTML code with interleaved Tcl scripts enclosed in &lt;? and ?&gt; tags.
 
-The following special commands are available
+The following special commands are available:
 
     @ arg
         Synonym to [puts]. The argument is evaluated by Tcl if it's not enclosed in braces.
@@ -74,26 +74,28 @@ The following special commands are available
         Send the output buffered (including headers and body data) to the client and close the connection. Once called,
         no further output is possible, but the script stays alive and can continue processing data. 
 
-    ::scgi::params
-        Return a dictionary with the request parameters.
-
-    ::scgi::param name
-        Return the value of a specified request parameter. If the parameter does not exist, return the empty string.
-
-    ::scgi::req_head
-        Return a dictionary with the request headers.
-
-    ::scgi::req_body
-        Return the (URL-encoded) request body.
+    ::scgi::die msg
+        Output the message msg and quit. The Status header is set to 500 Internal Server Error.
 
     ::scgi::exit
         Send the output buffered (including headers and body data) to the client and terminate the execution of the
         current script. [exit] is aliased to ::scgi::exit and can be used too.
-        
+
     xml arg arg arg
         Produce an xml tag. This command is transparent to the user. A line like the following
         <?xml version="1.0" encoding="utf-8"?>
         is really a starting <? tag, an xml command, two arguments, and a closing ?> tag.
+
+Additionally, the following variables are available to client scripts:
+
+    ::scgi::params
+        A dictionary with the request parameters.
+
+    ::scgi::headers
+        A dictionary with the request headers.
+
+    ::scgi::body
+        The URL-encoded request body.
 
 Short tags are also available by using a combination of an opening tag &lt;? and @ command:
 
