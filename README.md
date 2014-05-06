@@ -4,6 +4,32 @@ tcl-scgi
 This is a Simple Common Gateway Interface (SCGI) handler implemented as a multi-threaded server using the Tcl programming language.
 Each request is first parsed by the main thread then dispatched to be served by a dedicated thread.
 
+The result of the following example can be seen <a href="https://www.ptrcrt.ch/example.stcl">here</a>.
+
+    <?xml version="1.0" encoding="utf-8"?>
+    <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+    <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+        <head>
+            <title>tcl-scgi example</title>
+        </head>
+        <body>
+            <p><label style="font-weight: bold">gray-scale table</label></p>
+            <table><tr>
+            <?
+                set lvl 0
+                while {$lvl <= 255} {
+                    set color "#[format %02X $lvl][format %02X $lvl][format %02X $lvl]"
+                    @ "<td style=\"background-color: $color; width: 20px; height: 20px\">&nbsp;</td>\n"
+                    if {[incr lvl] % 16 == 0 && $lvl != 256} {
+                        @ "</tr>\n<tr>\n"
+                    }
+                }
+            ?>
+            </tr></table>
+        </body>
+    </html>
+
+
 The handler can be invoked with the following arguments:
 
     -f
