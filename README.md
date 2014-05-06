@@ -63,6 +63,11 @@ The following special commands are available
     ::scgi::exit
         Send the output buffered (including headers and body data) to the client and terminate the execution of the
         current script. [exit] is aliased to ::scgi::exit and can be used too.
+        
+    xml arg arg arg
+        Produce an xml tag. This command is transparent to the user. A line like the following
+        <?xml version="1.0" encoding="utf-8"?>
+        is really a starting <? tag, an xml command, two arguments, and a closing ?> tag.
 
 Short tags are also available by using a combination of an opening tag &lt;? and @ command:
 
