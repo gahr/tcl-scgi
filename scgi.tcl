@@ -602,7 +602,7 @@ namespace eval ::scgi:: {
                                 set scanIdx $begIdx+2
                                 set moreScripts 1
                             } else {
-                                die "$script:$lineNo -- error parsing input""
+                                die "$script:$lineNo -- error parsing input"
                                 close $fd
                                 return
                             }
