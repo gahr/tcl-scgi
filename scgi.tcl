@@ -375,6 +375,7 @@ namespace eval ::scgi:: {
 
             namespace eval ::scgi:: {
 
+                variable int        {}
                 variable in_head    {}
                 variable in_body    {}
                 variable in_params  {}
@@ -383,31 +384,37 @@ namespace eval ::scgi:: {
                 variable flushed    0
 
                 ##
-                # Handle the request
+                # Attempt to evaluate a script in the slave interpreter, die if it fails
                 #
-                proc handle {} {
+                proc tryEval {script} {
+                    variable int
+                    if {[catch {$int eval $script} err]} {
+                        die {}
+                        return 0
+                    }
+
+                    return 1
+                }
+
+                ##
+                # Quit with an error
+                #
+                proc die {msg} {
+                    ::scgi::header Status {500 Internal server error} false
+                    if {$msg ne {}} {
+                        ::scgi::puts $msg
+                    } else {
+                        ::scgi::puts "<pre>$::errorInfo</pre>"
+                    }
+                    ::scgi::finalize
+                }
+
+                ##
+                # Locate the script to parse
+                #
+                proc locate_script {} {
                     variable in_head
-                    variable in_body
-                    variable in_params
 
-                    upvar sock sock conf conf
-
-                    set in_head $::head
-                    set in_body $::body
-
-                    # decode the parameters (might be in both query string and body)
-                    set plist [dget? $in_head QUERY_STRING]
-                    if {[dexists $in_head HTTP_CONTENT_TYPE] && [dget $in_head HTTP_CONTENT_TYPE] eq {application/x-www-form-urlencoded}} {
-                        if {$in_body ne {}} {
-                            lappend plist $in_body
-                        }
-                    }
-
-                    foreach {k v} [split $plist {& =}] {
-                        lappend in_params [::scgi::decode $k] [::scgi::decode $v]
-                    }
-
-                    # locate the Tcl script to execute
                     set droot [dget? $in_head DOCUMENT_ROOT]
                     set duri  [regsub {^/} [dget? $in_head DOCUMENT_URI] {}]
                     set sname [regsub {^/} [dget? $in_head SCRIPT_NAME] {}]
@@ -435,12 +442,51 @@ namespace eval ::scgi:: {
 
                     if {!$sfound} {
                         ::scgi::header Status {404 Not found}
-                        ::scgi::puts "Could not find $script on the server"
-                        ::scgi::finalize
+                        die "Could not find $script on the server"
                         return
                     }
 
+                    return $script
+                }
+
+                ##
+                # Handle the request
+                #
+                proc handle {} {
+                    variable int
+                    variable in_head
+                    variable in_body
+                    variable in_params
+
+                    upvar sock sock conf conf
+
+                    set in_head $::head
+                    set in_body $::body
+
+                    # decode the parameters (might be in both query string and body)
+                    # and create a dictionary (in_params)
+                    set plist [dget? $in_head QUERY_STRING]
+                    if {[dexists $in_head HTTP_CONTENT_TYPE] && [dget $in_head HTTP_CONTENT_TYPE] eq {application/x-www-form-urlencoded}} {
+                        if {$in_body ne {}} {
+                            lappend plist $in_body
+                        }
+                    }
+                    foreach {k v} [split $plist {& =}] {
+                        lappend in_params [::scgi::decode $k] [::scgi::decode $v]
+                    }
+
+                    # locate the script to parse
+                    set script [locate_script]
+
+                    # create the interpreter that will be used to
+                    # eval the code inside the script
                     set int [interp create]
+                    $int bgerror ::scgi::die
+
+                    # Go into the directory where the script is
+                    if {![tryEval [list cd [file normalize [file dirname $script]]]]} {
+                        return
+                    }
 
                     # Setup aliases in the ::scgi::namespace
                     interp alias $int ::scgi::header   {} ::scgi::header
@@ -451,21 +497,126 @@ namespace eval ::scgi:: {
                     interp alias $int ::scgi::param    {} ::scgi::param
                     interp alias $int ::scgi::params   {} ::scgi::params
                     interp alias $int ::scgi::exit     {} ::scgi::finalize
+                    interp alias $int ::scgi::die      {} ::scgi::die
+                    interp alias $int xml              {} ::scgi::xml
                     interp alias $int exit             {} ::scgi::finalize
 
                     # Close the standard I/O channels
-                    interp eval $int chan close stdin
-                    interp eval $int chan close stdout
-                    interp eval $int chan close stderr
+                    $int eval chan close stdin
+                    $int eval chan close stdout
+                    $int eval chan close stderr
 
-                    # Go into the directory where the script is
-                    interp eval $int cd [file normalize [file dirname $script]]
+                    # State in the finite state machine:
+                    # 0 - HTML code
+                    # 1 - Tcl code
+                    set fsmState 0
+                    set tclCode {}
+                    set fd [open $script r]
+                    set lineNo 0
 
-                    # Source the script in the slave interpreter
-                    if {[catch {interp eval $int source $script} err]} {
-                        ::scgi::header Status {500 Internal server error}
-                        ::scgi::puts <pre>$::errorInfo</pre>
+                    while {[gets $fd line] >= 0} {
+                        incr lineNo
+
+                        set moreScripts 1
+                        set scanIdx 0
+                        while {$moreScripts} {
+
+                            set begIdx [string first "<?" $line $scanIdx]
+                            set endIdx [string first "?>" $line $scanIdx]
+
+                            # The following cases are possible, with
+                            # a != -1, b != -1, a < b
+                            # | branch | $begIdx | $endIdx | meaning
+                            # |   A    |   -1    |   -1    | fsmState == 0 ? pure HTML line : pure Tcl line
+                            # |   B    |    a    |   -1    | start of a multi-line script. fsmState must be 0. Set fsmState to 1
+                            # |   C    |   -1    |    b    | end of a multi-line script. fsmState must be 1. Set fsmState to 0
+                            # |   D    |    a    |    b    | script fully enclosed. fsmState must be 0 and remains 0.
+                            # |   E    |    b    |    a    | end of a multi-line script, beginning of another script. fsmState must be 1 and remains 1
+                            #
+                            if {$begIdx == -1 && $endIdx == -1} { ; # ...
+                                # A
+                                if {$fsmState == 0} {
+                                    ::scgi::puts [string range $line $scanIdx end]
+                                } else {
+                                    append tclCode [string range $line $scanIdx end] "\n"
+                                }
+                                set moreScripts 0
+
+                            } elseif {$begIdx != -1 && $endIdx == -1} { ; # <? ...
+                                # B
+                                if {$fsmState != 0} {
+                                    die "$script:$lineNo -- invalid begin of nested <? ... ?> block"
+                                    close $fd
+                                    return
+                                }
+                                append tclCode [string range $line $begIdx+2 end] "\n"
+                                set fsmState 1
+                                set moreScripts 0
+
+                            } elseif {$begIdx == -1 && $endIdx != -1} { ; # ... ?>
+                                # C
+                                if {$fsmState != 1} {
+                                    die "$script:$lineNo -- invalid end of <? ... ?> block"
+                                    close $fd
+                                    return
+                                }
+                                set fsmState 0
+                                append tclCode [string range $line $scanIdx $endIdx-1]
+                                if {![tryEval $tclCode]} {
+                                    close $fd
+                                    return
+                                }
+                                set tclCode {}
+                                ::scgi::puts [string range $line $endIdx+2 end]
+                                set moreScripts 0
+
+                            } elseif {$begIdx < $endIdx} { ; # <? ... ?>
+                                # D
+                                if {$fsmState != 0} {
+                                    die "$script:$lineNo -- invalid nested <? ... ?> block"
+                                    close $fd
+                                    return
+                                }
+                                ::scgi::puts [string range $line $scanIdx $begIdx-1]
+                                if {![tryEval [string range $line $begIdx+2 $endIdx-1]]} {
+                                    close $fd
+                                    return
+                                }
+                                set scanIdx $endIdx+2
+                                set moreScripts 1
+
+                            } elseif {$begIdx > $endIdx} { ; # ... ?> ... <?
+                                # E
+                                if {$fsmState !=1 } {
+                                    die "$script:$lineNo -- invalid end of <? ... ?> block"
+                                    close $fd
+                                    return
+                                }
+                                append tclCode [string range $line $scanIdx $endIdx-1]
+                                if {![tryEval $tclCode]} {
+                                    close $fd
+                                    return
+                                }
+                                set tclCode {}
+                                ::scgi::puts [string range $line $endIdx+2 $begIdx-1]
+                                set scanIdx $begIdx+2
+                                set moreScripts 1
+                            } else {
+                                die "$script:$lineNo -- error parsing input""
+                                close $fd
+                                return
+                            }
+
+                            if {!$moreScripts} {
+                                break
+                            }
+                        }
+
+                        if {$fsmState == 0} {
+                            puts "\n"
+                        }
                     }
+                    close $fd
 
                     finalize
                 }
@@ -550,6 +701,17 @@ namespace eval ::scgi:: {
                     if {!$flushed} {
                         append out_body $data
                     }
+                }
+
+                ##
+                # Create an XML tag
+                proc xml {args} {
+                    set xml "<?xml"
+                    foreach a $args {
+                        append xml " $a"
+                    }
+                    append xml "?>"
+                    puts $xml
                 }
 
                 ##
