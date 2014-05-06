@@ -18,8 +18,8 @@ The result of the following example can be seen <a href="https://www.ptrcrt.ch/e
             <?
                 set lvl 0
                 while {$lvl <= 255} {
-                    set color "#[format %02X $lvl][format %02X $lvl][format %02X $lvl]"
-                    @ "<td style=\"background-color: $color; width: 20px; height: 20px\">&nbsp;</td>\n"
+                    set color "#[string range [format %02X $lvl] 3]"
+                    @ "<td style=\"background-color: $color; width: 20px; height: 20px\" title=\"$color\">&nbsp;</td>\n"
                     if {[incr lvl] % 16 == 0 && $lvl != 256} {
                         @ "</tr>\n<tr>\n"
                     }
