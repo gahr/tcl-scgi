@@ -126,10 +126,10 @@ namespace eval ::scgi:: {
             thread::cond wait [tsv::get tsv cond] [tsv::get tsv mutex]
         }
         thread::mutex unlock [tsv::get tsv mutex]
-        #tsv::lock tsv {
+        tsv::lock tsv {
             set tid [tsv::lindex tsv freeThreads end]
             tsv::lpop tsv freeThreads end
-        #}
+        }
 
         return $tid
     }
