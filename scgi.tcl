@@ -375,13 +375,9 @@ namespace eval ::scgi:: {
 
             namespace eval ::scgi:: {
 
-                variable int        {}
-                variable in_head    {}
-                variable in_body    {}
-                variable in_params  {}
-                variable out_head   {}
-                variable out_body   {}
-                variable flushed    0
+                variable out_head {}
+                variable out_body {}
+                variable flushed  0
 
                 ##
                 # Quit with an error
@@ -401,12 +397,10 @@ namespace eval ::scgi:: {
                 # Locate the script to parse
                 #
                 proc locate_script {} {
-                    variable in_head
-
-                    set droot [dget? $in_head DOCUMENT_ROOT]
-                    set duri  [regsub {^/} [dget? $in_head DOCUMENT_URI] {}]
-                    set sname [regsub {^/} [dget? $in_head SCRIPT_NAME] {}]
-                    set pinfo [regsub {^/} [dget? $in_head PATH_INFO] {}]
+                    set droot [dget? $::head DOCUMENT_ROOT]
+                    set duri  [regsub {^/} [dget? $::head DOCUMENT_URI] {}]
+                    set sname [regsub {^/} [dget? $::head SCRIPT_NAME] {}]
+                    set pinfo [regsub {^/} [dget? $::head PATH_INFO] {}]
 
                     # If no script_path (-s) argument was provided, use DOCUMENT_ROOT
                     # as a base. Then try to append, in order:
@@ -440,26 +434,17 @@ namespace eval ::scgi:: {
                 # Handle the request
                 #
                 proc handle {} {
-                    variable int
-                    variable in_head
-                    variable in_body
-                    variable in_params
-
-                    upvar sock sock conf conf
-
-                    set in_head $::head
-                    set in_body $::body
-
                     # decode the parameters (might be in both query string and body)
-                    # and create a dictionary (in_params)
-                    set plist [dget? $in_head QUERY_STRING]
-                    if {[dexists $in_head HTTP_CONTENT_TYPE] && [dget $in_head HTTP_CONTENT_TYPE] eq {application/x-www-form-urlencoded}} {
-                        if {$in_body ne {}} {
-                            lappend plist $in_body
+                    # and create a dictionary of parameters
+                    set plist [dget? $::head QUERY_STRING]
+                    if {[dexists $::head HTTP_CONTENT_TYPE] && [dget $::head HTTP_CONTENT_TYPE] eq {application/x-www-form-urlencoded}} {
+                        if {$::body ne {}} {
+                            lappend plist $::body
                         }
                     }
+                    set params {}
                     foreach {k v} [split $plist {& =}] {
-                        lappend in_params [::scgi::decode $k] [::scgi::decode $v]
+                        lappend params [::scgi::decode $k] [::scgi::decode $v]
                     }
 
                     # locate the script to parse
@@ -495,9 +480,9 @@ namespace eval ::scgi:: {
                     interp alias $int xml              {} ::scgi::xml
 
                     # Create variables that can be used within the client script
-                    $int eval [list set ::scgi::params  $in_params]
-                    $int eval [list set ::scgi::headers $in_head]
-                    $int eval [list set ::scgi::body    $in_body]
+                    $int eval [list set ::scgi::params  $params] ;# params was built just above
+                    $int eval [list set ::scgi::headers $::head]
+                    $int eval [list set ::scgi::body    $::body]
                     $int eval [list set ::scgi::terminate 0]
 
                     # Reset the ::errorInfo variable
