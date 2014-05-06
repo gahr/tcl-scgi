@@ -106,7 +106,7 @@ namespace eval ::scgi:: {
 
     ##
     # Get a free thread by creating up to max_threads. If none is available,
-    # wait until one is fed back to the the free threads list.
+    # wait until one is fed back to the free threads list.
     #
     proc get_thread {} {
         variable conf
