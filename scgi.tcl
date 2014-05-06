@@ -384,29 +384,17 @@ namespace eval ::scgi:: {
                 variable flushed    0
 
                 ##
-                # Attempt to evaluate a script in the slave interpreter, die if it fails
-                #
-                proc tryEval {script} {
-                    variable int
-                    if {[catch {$int eval $script} err]} {
-                        die {}
-                        return 0
-                    }
-
-                    return 1
-                }
-
-                ##
                 # Quit with an error
                 #
-                proc die {msg} {
+                proc die {{msg {}}} {
                     ::scgi::header Status {500 Internal server error} false
                     if {$msg ne {}} {
-                        ::scgi::puts $msg
+                        puts "<pre>$msg</pre>"
                     } else {
-                        ::scgi::puts "<pre>$::errorInfo</pre>"
+                        puts "<pre>$::errorInfo</pre>"
                     }
-                    ::scgi::finalize
+                    flush
+                    tailcall uplevel return
                 }
 
                 ##
@@ -443,7 +431,6 @@ namespace eval ::scgi:: {
                     if {!$sfound} {
                         ::scgi::header Status {404 Not found}
                         die "Could not find $script on the server"
-                        return
                     }
 
                     return $script
@@ -484,27 +471,37 @@ namespace eval ::scgi:: {
                     $int bgerror ::scgi::die
 
                     # Go into the directory where the script is
-                    if {![tryEval [list cd [file normalize [file dirname $script]]]]} {
-                        return
+                    set dir [file normalize [file dirname $script]]
+                    if {[catch {$int eval cd $dir}]} {
+                        die
                     }
-
-                    # Setup aliases in the ::scgi::namespace
-                    interp alias $int ::scgi::header   {} ::scgi::header
-                    interp alias $int @                {} ::scgi::puts
-                    interp alias $int ::scgi::flush    {} ::scgi::flush
-                    interp alias $int ::scgi::req_head {} ::scgi::req_head
-                    interp alias $int ::scgi::req_body {} ::scgi::req_body
-                    interp alias $int ::scgi::param    {} ::scgi::param
-                    interp alias $int ::scgi::params   {} ::scgi::params
-                    interp alias $int ::scgi::exit     {} ::scgi::finalize
-                    interp alias $int ::scgi::die      {} ::scgi::die
-                    interp alias $int xml              {} ::scgi::xml
-                    interp alias $int exit             {} ::scgi::finalize
 
                     # Close the standard I/O channels
                     $int eval chan close stdin
                     $int eval chan close stdout
                     $int eval chan close stderr
+
+                    # Setup aliases in the ::scgi::namespace
+                    interp alias $int @                {} ::scgi::puts
+                    interp alias $int ::scgi::header   {} ::scgi::header
+                    interp alias $int ::scgi::flush    {} ::scgi::flush
+                    interp alias $int ::scgi::die      {} ::scgi::die
+                    interp alias $int ::scgi::exit     $int set ::scgi::terminate 1
+                    interp alias $int exit             $int set ::scgi::terminate 1
+
+                    # the following is an alias that's transparent to the user
+                    # and is employed to output XML tags, e.g.:
+                    # <?xml version="1.0" encoding="utf-8"?>
+                    interp alias $int xml              {} ::scgi::xml
+
+                    # Create variables that can be used within the client script
+                    $int eval [list set ::scgi::params  $in_params]
+                    $int eval [list set ::scgi::headers $in_head]
+                    $int eval [list set ::scgi::body    $in_body]
+                    $int eval [list set ::scgi::terminate 0]
+
+                    # Reset the ::errorInfo variable
+                    set ::errorInfo {}
 
                     # State in the finite state machine:
                     # 0 - HTML code
@@ -519,7 +516,7 @@ namespace eval ::scgi:: {
 
                         set moreScripts 1
                         set scanIdx 0
-                        while {$moreScripts} {
+                        while {$moreScripts && ![$int eval set ::scgi::terminate]} {
 
                             set begIdx [string first "<?" $line $scanIdx]
                             set endIdx [string first "?>" $line $scanIdx]
@@ -539,15 +536,21 @@ namespace eval ::scgi:: {
                                     ::scgi::puts [string range $line $scanIdx end]
                                 } else {
                                     append tclCode [string range $line $scanIdx end] "\n"
+                                    if {[info complete $tclCode]} {
+                                        if {[catch {$int eval $tclCode}]} {
+                                            close $fd
+                                            die
+                                        }
+                                        set tclCode {}
+                                    }
                                 }
                                 set moreScripts 0
 
                             } elseif {$begIdx != -1 && $endIdx == -1} { ; # <? ...
                                 # B
                                 if {$fsmState != 0} {
-                                    die "$script:$lineNo -- invalid begin of nested <? ... ?> block"
                                     close $fd
-                                    return
+                                    die "$script:$lineNo -- invalid begin of nested <? ... ?> block"
                                 }
                                 append tclCode [string range $line $begIdx+2 end] "\n"
                                 set fsmState 1
@@ -556,15 +559,14 @@ namespace eval ::scgi:: {
                             } elseif {$begIdx == -1 && $endIdx != -1} { ; # ... ?>
                                 # C
                                 if {$fsmState != 1} {
-                                    die "$script:$lineNo -- invalid end of <? ... ?> block"
                                     close $fd
-                                    return
+                                    die "$script:$lineNo -- invalid end of <? ... ?> block"
                                 }
                                 set fsmState 0
                                 append tclCode [string range $line $scanIdx $endIdx-1]
-                                if {![tryEval $tclCode]} {
+                                if {[catch {$int eval $tclCode}]} {
                                     close $fd
-                                    return
+                                    die
                                 }
                                 set tclCode {}
                                 ::scgi::puts [string range $line $endIdx+2 end]
@@ -578,9 +580,9 @@ namespace eval ::scgi:: {
                                     return
                                 }
                                 ::scgi::puts [string range $line $scanIdx $begIdx-1]
-                                if {![tryEval [string range $line $begIdx+2 $endIdx-1]]} {
+                                if {[catch {$int eval [string range $line $begIdx+2 $endIdx-1]}]} {
                                     close $fd
-                                    return
+                                    die
                                 }
                                 set scanIdx $endIdx+2
                                 set moreScripts 1
@@ -593,18 +595,17 @@ namespace eval ::scgi:: {
                                     return
                                 }
                                 append tclCode [string range $line $scanIdx $endIdx-1]
-                                if {![tryEval $tclCode]} {
+                                if {[catch {$int eval $tclCode}]} {
                                     close $fd
-                                    return
+                                    die
                                 }
                                 set tclCode {}
                                 ::scgi::puts [string range $line $endIdx+2 $begIdx-1]
                                 set scanIdx $begIdx+2
                                 set moreScripts 1
                             } else {
-                                die "$script:$lineNo -- error parsing input"
                                 close $fd
-                                return
+                                die "$script:$lineNo -- error parsing input"
                             }
 
                             if {!$moreScripts} {
@@ -617,8 +618,6 @@ namespace eval ::scgi:: {
                         }
                     }
                     close $fd
-
-                    finalize
                 }
 
                 ##
@@ -640,41 +639,13 @@ namespace eval ::scgi:: {
                 }
 
                 ##
-                # Retrieve a dictionary (k1 v1 k2 v2 ...) with the request headers
-                proc req_head {} {
-                    variable in_head
-                    return $in_head
-                }
-
-                ##
-                # Retrieve the request body
-                proc req_body {} {
-                    variable in_body
-                    return $in_body
-                }
-
-                ##
-                # Retrieve a parameter from the query string / body
-                proc param {name} {
-                    variable in_params
-                    return [dget? $in_params $name]
-                }
-
-                ##
-                # Retrieve an array with all the parameters from the query string / body
-                proc params {} {
-                    variable in_params
-                    return $in_params
-                }
-
-                ##
                 # Add a header to the response (buffered)
                 proc header {key value {replace 1}} {
                     variable out_head
                     variable flushed
 
                     if {$flushed} {
-                        error "Data have already been flushed"
+                        return
                     }
 
                     set k [string totitle [string trim $key]]
@@ -750,19 +721,15 @@ namespace eval ::scgi:: {
                     catch {close $::sock}
                 }
 
-                ##
-                # Flush any output (headers and body) waiting
-                # on the output buffer and terminate
-                proc finalize {} {
-                    flush
-                }
             }
-            
+
             ::scgi::handle
+            ::scgi::flush
 
             tsv::lappend tsv freeThreads [thread::id]
             thread::cond notify [tsv::get tsv cond]
         }
+
         cleanup $sock
     }
 }
