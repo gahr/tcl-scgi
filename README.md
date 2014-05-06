@@ -29,48 +29,42 @@ The handler can be invoked with the following arguments:
 The scgi.tcl software requires Tcl 8.6 and the Thread extension.
 
 
-User scripts can use the following procs:
+User scripts consist of pure HTML code with interleaved Tcl scripts enclosed in &lt;? and ?&gt; tags.
 
-    @ " text text [command arg1 arg2] $var1 $var2 \n more text"
+The following special commands are available
 
-    Append its argument, evaluated by Tcl, to the output buffer.
-
-    @ { pure html text }
-
-    Append its argument, not evaluated by Tcl, to the output buffer.
-
+    @ arg
+        Synonym to [puts]. The argument is evaluated by Tcl if it's not enclosed in braces.
+        Examples:
+        @ [info hostname]
+        @ "Using Tcl version [tcl patchlevel]"
+        @ {Here [square brakets] are dumped literally}
+   
     ::scgi::header key value ?replace?
-
-    Append the header "Key: value" to the output buffer. If replace is true
-    (the default), a previous header with the same key is replaced by the
-    one specified.
-
+        Append the header "Key: value" to the output buffer. If replace is true (the default), a previous header with
+        the same key is replaced by the one specified.
+    
     ::scgi::flush
-
-    Send the output buffered (including headers and body data) to the client and
-    close the connection. Once called, no further output is possible, but the script
-    stays alive and can continue processing data. 
+        Send the output buffered (including headers and body data) to the client and close the connection. Once called,
+        no further output is possible, but the script stays alive and can continue processing data. 
 
     ::scgi::params
-
-    Return a dictionary with the request parameters.
+        Return a dictionary with the request parameters.
 
     ::scgi::param name
-
-     Return the value of a specified request parameter. If the parameter does not exist, 
-     return the empty string.
+        Return the value of a specified request parameter. If the parameter does not exist, return the empty string.
 
     ::scgi::req_head
-    
-    Return a dictionary with the request headers.
+        Return a dictionary with the request headers.
 
     ::scgi::req_body
-
-    Return the (URL-encoded) request body.
+        Return the (URL-encoded) request body.
 
     ::scgi::exit
+        Send the output buffered (including headers and body data) to the client and terminate the execution of the
+        current script. [exit] is aliased to ::scgi::exit and can be used too.
 
-    Send the output buffered (including headers and body data) to the client
-    and terminate the execution of the current script. [exit] is aliased
-    to ::scgi::exit and can be used too.
+Short tags are also available by using a combination of an opening tag &lt;? and @ command:
+
+    Running Tcl version <?@ [info patchlevel] ?>
 
