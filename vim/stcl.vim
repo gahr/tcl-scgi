@@ -1,10 +1,5 @@
-" Syntax file for .stcl scripts. Just copy the place somewhere 
-" handy and put the following line in your .vimrc
-"
-" au! BufRead,BufNewFile *.stcl source '/path/to/your/stcl.vim'
-
 syntax on
-set ft=tcl
+set ft=html
 
 " http://vim.wikia.com/wiki/Different_syntax_highlighting_within_regions_of_a_file
 function! TextEnableCodeSnip(filetype,start,end,textSnipHl) abort
@@ -32,5 +27,4 @@ function! TextEnableCodeSnip(filetype,start,end,textSnipHl) abort
   \ contains=@'.group
 endfunction
 
-call TextEnableCodeSnip('html', '@ {', '}', 'SpecialComment')
-call TextEnableCodeSnip('tcl', '@ \"', '\"', 'SpecialComment')
+call TextEnableCodeSnip('tcl', '<?', '?>', 'SpecialComment')
