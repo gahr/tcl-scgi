@@ -11,7 +11,7 @@
             set lvl 0
             while {$lvl <= 255} {
                 set color "#[string repeat [format %02X $lvl] 3]"
-                @ "<td style=\"background-color: $color; width: 20px; height: 20px\">&nbsp;</td>\n"
+                @ "<td style=\"background-color: $color; width: 20px; height: 20px\" title=\"$color\">&nbsp;</td>\n"
                 if {[incr lvl] % 16 == 0 && $lvl != 256} {
                     @ "</tr>\n<tr>\n"
                 }
