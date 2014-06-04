@@ -36,6 +36,8 @@
 # See README.md for documentation.
 #
 
+set version [list 0 1 0]
+
 package require Tcl 8.6
 package require Thread 2.7
 
@@ -62,13 +64,362 @@ set dhelpers {
 }
 eval $dhelpers
 
+
 namespace eval ::scgi:: {
+
+    ##
+    # The following script is used by worker threads to handle client
+    # connections. The worker thread is responsible for communicating with the
+    # client over the client socket and for closing the connection once done.
+    set worker_script {
+        eval $dhelpers
+
+        namespace eval ::scgi:: {
+
+            variable out_head {}
+            variable out_body {}
+            variable flushed  0
+
+            ##
+            # Quit with an error
+            proc die {{msg {}}} {
+                ::scgi::header Status {500 Internal server error} false
+                if {$msg ne {}} {
+                    puts "<pre>$msg</pre>"
+                } else {
+                    puts "<pre>$::errorInfo</pre>"
+                }
+                flush
+                tailcall uplevel return
+            }
+
+            ##
+            # Locate the script to parse
+            proc locate_script {} {
+                set droot [dget? $::head DOCUMENT_ROOT]
+                set duri  [regsub {^/} [dget? $::head DOCUMENT_URI] {}]
+                set sname [regsub {^/} [dget? $::head SCRIPT_NAME] {}]
+                set pinfo [regsub {^/} [dget? $::head PATH_INFO] {}]
+
+                # If no script_path (-s) argument was provided, use DOCUMENT_ROOT
+                # as a base. Then try to append, in order:
+                # - DOCUMENT_URI
+                # - SCRIPT_NAME
+                # - PATH_INFO
+                # - index.tcl
+                set script [dget? $::conf script_path]
+                if {$script eq {}} {
+                    set script $droot
+                }
+
+                set sfound 0
+                foreach trial [list $duri $sname $pinfo index.tcl] {
+                    set script [file join $script $trial]
+                    if {[file isfile $script] && [file exists $script] && [file readable $script]} {
+                        set sfound 1
+                        break
+                    }
+                }
+
+                if {!$sfound} {
+                    ::scgi::header Status {404 Not found}
+                    die "Could not find $script on the server"
+                }
+
+                return $script
+            }
+
+            ##
+            # Handle the request
+            proc handle {} {
+                # decode the parameters (might be in both query string and body)
+                # and create a dictionary of parameters
+                set plist [dget? $::head QUERY_STRING]
+                if {[dexists $::head HTTP_CONTENT_TYPE] && [dget $::head HTTP_CONTENT_TYPE] eq {application/x-www-form-urlencoded}} {
+                    if {$::body ne {}} {
+                        lappend plist $::body
+                    }
+                }
+                set params {}
+                foreach {k v} [split $plist {& =}] {
+                    lappend params [::scgi::decode $k] [::scgi::decode $v]
+                }
+
+                # locate the script to parse
+                set script [locate_script]
+
+                # create the interpreter that will be used to
+                # eval the code inside the script
+                set int [interp create]
+                $int bgerror ::scgi::die
+
+                # Go into the directory where the script is
+                set dir [file normalize [file dirname $script]]
+                if {[catch {$int eval cd $dir}]} {
+                    die
+                }
+
+                # Close the standard I/O channels
+                $int eval chan close stdin
+                $int eval chan close stdout
+                $int eval chan close stderr
+
+                # Setup aliases in the ::scgi::namespace
+                interp alias $int @                {} ::scgi::puts
+                interp alias $int ::scgi::header   {} ::scgi::header
+                interp alias $int ::scgi::flush    {} ::scgi::flush
+                interp alias $int ::scgi::die      {} ::scgi::die
+                interp alias $int ::scgi::exit     $int set ::scgi::terminate 1
+                interp alias $int exit             $int set ::scgi::terminate 1
+
+                # the following is an alias that's transparent to the user
+                # and is employed to output XML tags, e.g.:
+                # <?xml version="1.0" encoding="utf-8"?>
+                interp alias $int xml              {} ::scgi::xml
+
+                # Create variables that can be used within the client script
+                $int eval [list set ::scgi::params  $params] ;# params was built just above
+                $int eval [list set ::scgi::headers $::head]
+                $int eval [list set ::scgi::body    $::body]
+                $int eval [list set ::scgi::terminate 0]
+
+                # Reset the ::errorInfo variable
+                set ::errorInfo {}
+
+                # State in the finite state machine:
+                # 0 - HTML code
+                # 1 - Tcl code
+                set fsmState 0
+                set tclCode {}
+                set fd [open $script r]
+                set lineNo 0
+
+                while {[gets $fd line] >= 0} {
+                    incr lineNo
+
+                    set moreScripts 1
+                    set scanIdx 0
+                    while {$moreScripts && ![$int eval set ::scgi::terminate]} {
+
+                        set begIdx [string first "<?" $line $scanIdx]
+                        set endIdx [string first "?>" $line $scanIdx]
+
+                        # The following cases are possible, with
+                        # a != -1, b != -1, a < b
+                        # | branch | $begIdx | $endIdx | meaning
+                        # |   A    |   -1    |   -1    | fsmState == 0 ? pure HTML line : pure Tcl line
+                        # |   B    |    a    |   -1    | start of a multi-line script. fsmState must be 0. Set fsmState to 1
+                        # |   C    |   -1    |    b    | end of a multi-line script. fsmState must be 1. Set fsmState to 0
+                        # |   D    |    a    |    b    | script fully enclosed. fsmState must be 0 and remains 0.
+                        # |   E    |    b    |    a    | end of a multi-line script, beginning of another script. fsmState must be 1 and remains 1
+                        #
+                        if {$begIdx == -1 && $endIdx == -1} { ; # ...
+                            # A
+                            if {$fsmState == 0} {
+                                ::scgi::puts [string range $line $scanIdx end]
+                            } else {
+                                append tclCode [string range $line $scanIdx end] "\n"
+                                if {[info complete $tclCode]} {
+                                    if {[catch {$int eval $tclCode}]} {
+                                        close $fd
+                                        die
+                                    }
+                                    set tclCode {}
+                                }
+                            }
+                            set moreScripts 0
+
+                        } elseif {$begIdx != -1 && $endIdx == -1} { ; # <? ...
+                            # B
+                            if {$fsmState != 0} {
+                                close $fd
+                                die "$script:$lineNo -- invalid begin of nested <? ... ?> block"
+                            }
+                            append tclCode [string range $line $begIdx+2 end] "\n"
+                            set fsmState 1
+                            set moreScripts 0
+
+                        } elseif {$begIdx == -1 && $endIdx != -1} { ; # ... ?>
+                            # C
+                            if {$fsmState != 1} {
+                                close $fd
+                                die "$script:$lineNo -- invalid end of <? ... ?> block"
+                            }
+                            set fsmState 0
+                            append tclCode [string range $line $scanIdx $endIdx-1]
+                            if {[catch {$int eval $tclCode}]} {
+                                close $fd
+                                die
+                            }
+                            set tclCode {}
+                            ::scgi::puts [string range $line $endIdx+2 end]
+                            set moreScripts 0
+
+                        } elseif {$begIdx < $endIdx} { ; # <? ... ?>
+                            # D
+                            if {$fsmState != 0} {
+                                die "$script:$lineNo -- invalid nested <? ... ?> block"
+                                close $fd
+                                return
+                            }
+                            ::scgi::puts [string range $line $scanIdx $begIdx-1]
+                            if {[catch {$int eval [string range $line $begIdx+2 $endIdx-1]}]} {
+                                close $fd
+                                die
+                            }
+                            set scanIdx $endIdx+2
+                            set moreScripts 1
+
+                        } elseif {$begIdx > $endIdx} { ; # ... ?> ... <?
+                            # E
+                            if {$fsmState !=1 } {
+                                die "$script:$lineNo -- invalid end of <? ... ?> block"
+                                close $fd
+                                return
+                            }
+                            append tclCode [string range $line $scanIdx $endIdx-1]
+                            if {[catch {$int eval $tclCode}]} {
+                                close $fd
+                                die
+                            }
+                            set tclCode {}
+                            ::scgi::puts [string range $line $endIdx+2 $begIdx-1]
+                            set scanIdx $begIdx+2
+                            set moreScripts 1
+                        } else {
+                            close $fd
+                            die "$script:$lineNo -- error parsing input"
+                        }
+
+                        if {!$moreScripts} {
+                            break
+                        }
+                    }
+
+                    if {$fsmState == 0} {
+                        puts "\n"
+                    }
+                }
+                close $fd
+            }
+
+            ##
+            # Decode a www-url-encoded string (from ncgi module).
+            proc decode {str} {
+                # rewrite "+" back to space
+                # protect \ from quoting another '\'
+                set str [string map [list + { } "\\" "\\\\" \[ \\\[ \] \\\]] $str]
+
+                # prepare to process all %-escapes
+                regsub -all -- {%([Ee][A-Fa-f0-9])%([89ABab][A-Fa-f0-9])%([89ABab][A-Fa-f0-9])} \
+                    $str {[encoding convertfrom utf-8 [binary decode hex \1\2\3]]} str
+                regsub -all -- {%([CDcd][A-Fa-f0-9])%([89ABab][A-Fa-f0-9])}                     \
+                    $str {[encoding convertfrom utf-8 [binary decode hex \1\2]]} str
+                regsub -all -- {%([0-7][A-Fa-f0-9])} $str {\\u00\1} str
+
+                # process \u unicode mapped chars
+                return [subst -novar $str]
+            }
+
+            ##
+            # Add a header to the response (buffered).
+            proc header {key value {replace 1}} {
+                variable out_head
+                variable flushed
+
+                if {$flushed} {
+                    return
+                }
+
+                set k [string totitle [string trim $key]]
+                set v [string trim $value]
+
+                if {[dexists $out_head $k] && [string is false $replace]} {
+                    return
+                }
+
+                # Handle a couple of special headers
+                switch $k {
+                    Location {
+                        header Status {302 Found}
+                    }
+                }
+                dset out_head $k $v
+            }
+
+            ##
+            # Append data to the response (buffered).
+            proc puts {data} {
+                variable out_body
+                variable flushed
+                if {!$flushed} {
+                    append out_body $data
+                }
+            }
+
+            ##
+            # Create an XML tag.
+            proc xml {args} {
+                set xml "<?xml"
+                foreach a $args {
+                    append xml " $a"
+                }
+                append xml "?>"
+                puts $xml
+            }
+
+            ##
+            # Flush any output (headers and body) waiting on the output
+            # buffer. If we get here, at least the Status header has been
+            # set.
+            proc flush {} {
+                variable out_head
+                variable out_body
+                variable flushed
+
+                if {$flushed} {
+                    return
+                }
+
+                set out {}
+
+                # Set Status and Content-type, if not set yet
+                header Status {200} false
+                header Content-type {text/html} false
+                header Content-length [expr {[string bytelength $out_body]}]
+
+                # Output the headers
+                foreach {k v} $out_head {
+                    append out "$k: $v\n"
+                }
+
+                # Output the body
+                append out "\n$out_body"
+
+                # Flush
+                ::puts -nonewline $::sock $out
+
+                set flushed 1
+
+                catch {close $::sock}
+            }
+
+        }
+
+        ::scgi::handle
+        ::scgi::flush
+
+        tsv::lappend tsv freeThreads [thread::id]
+        thread::cond notify [tsv::get tsv cond]
+    }
 
     ##
     # Configuration options
     variable conf {}
 
     ##
+    # Thread pool -related variables. We don't use tpool because we don't have
+    # a way to pass channels when posting a job into a tpool instance.
     variable nofThreads  0
     tsv::set tsv freeThreads [list]
     tsv::set tsv mutex [thread::mutex create]
@@ -107,7 +458,6 @@ namespace eval ::scgi:: {
     ##
     # Get a free thread by creating up to max_threads. If none is available,
     # wait until one is fed back to the free threads list.
-    #
     proc get_thread {} {
         variable conf
         variable nofThreads
@@ -135,8 +485,7 @@ namespace eval ::scgi:: {
     }
 
     ##
-    # Parse command line arguments
-    #
+    # Parse command line arguments.
     proc parse_args {} {
         variable conf
 
@@ -174,13 +523,16 @@ namespace eval ::scgi:: {
                 -v {
                     dset conf verbose true
                 }
+                -version {
+                    puts "This is tcl-scgi [join $::version .]"
+                    exit 0
+                }
                 default {
                     error "Unhandled argument: [lindex $::argv $i]"
                 }
             }
         }
     }
-
 
     proc log {sock msg} {
         variable conf
@@ -193,15 +545,14 @@ namespace eval ::scgi:: {
     }
 
     ##
-    # Server socket.
+    # Create server socket.
     proc serve {} {
         variable conf
         socket -server [namespace code handle_connect] -myaddr [dget $conf addr] [dget $conf port]
     }
 
     ##
-    # Cleanup a connection's data
-    #
+    # Cleanup a connection's data.
     proc cleanup {sock} {
         variable cdata
 
@@ -215,8 +566,7 @@ namespace eval ::scgi:: {
     }
 
     ##
-    # Reschedule the timeout for a connection
-    #
+    # Reschedule the timeout for a connection.
     proc schedule_timeout {sock} {
         variable cdata
         variable conf
@@ -232,8 +582,7 @@ namespace eval ::scgi:: {
     }
 
     ##
-    # Hangup a stalling connection
-    #
+    # Hangup a stalling connection.
     proc hangup {sock} {
         variable cdata
 
@@ -247,12 +596,8 @@ namespace eval ::scgi:: {
         cleanup $sock
     }
 
-
     ##
     # Handle a new connection.
-    #
-    # Each connection is assigned a unique identifier.
-    #
     proc handle_connect {sock addr port} {
         variable cdata
 
@@ -270,7 +615,6 @@ namespace eval ::scgi:: {
 
     ##
     # Read data from a connection.
-    #
     proc handle_read {sock} {
         variable cdata
 
@@ -280,12 +624,14 @@ namespace eval ::scgi:: {
             cleanup $sock
         }
 
-        # reschedule the timeout
+        # Reschedule the timeout.
         schedule_timeout $sock
 
         if {[dget $cdata $sock:status] == 0} {
+
+            # Connection established, reading the header length.
             log $sock "handle_read 0"
-            # connection established, reading the header length
+
             if {![regexp -indices {^([0-9]+)(:)} [dget $cdata $sock:data] match lenIdx colIdx]} {
                 return
             }
@@ -297,8 +643,10 @@ namespace eval ::scgi:: {
         }
 
         if {[dget $cdata $sock:status] == 1} {
+
+            # Reading headers.
             log $sock "handle_read 1"
-            # reading headers
+
             if {[string length [dget $cdata $sock:data]] < [dget $cdata $sock:hlen] + [dget $cdata $sock:hbeg]} {
                 return
             }
@@ -319,23 +667,23 @@ namespace eval ::scgi:: {
         }
 
         if {[dget $cdata $sock:status] == 2} {
+
+            # Reading body.
             log $sock "handle_read 2"
 
-            # headers have been read, check CONTENT_LENGTH. According to
-            # the specification of the SCGI protocol, this header must
-            # always be present, even if it's 0.
+            # Check CONTENT_LENGTH. According to the SCGI specification, this
+            # header must always be present, even if it's 0.
             dset cdata $sock:blen [dget? $cdata $sock:head CONTENT_LENGTH]
             if {![string is entier [dget $cdata $sock:blen]]} {
                 hangup $sock
             }
 
-            # the request is ready to be handled if
+            # The request is ready to be handled if
             # - there is no body at all, or
             # - the expected data length equals the actual data length
             set noBody [expr {[dget $cdata $sock:blen] == 0}]
             set expLen [expr {[dget $cdata $sock:hlen] + [dget $cdata $sock:hbeg] + [dget $cdata $sock:blen] + 1}] ;# +1 for the comma
             set actLen [string length [dget $cdata $sock:data]]
-
             if {$noBody || $expLen == $actLen} {
                 dincr cdata $sock:status
                 handle_request $sock
@@ -345,376 +693,33 @@ namespace eval ::scgi:: {
 
     ##
     # Handle a request on a different thread.
-    #
     proc handle_request {sock} {
         variable cdata
         variable conf
+        variable worker_script
 
         log $sock handle_request
 
-        # we can't read from the socket once we begin serving the request
+        # We can't read from the socket once we begin serving the request, and
+        # we don't need a timeout anymore.
         chan event $sock r {}
-
-        # no need for a timeout anymore
         after cancel [dget? $cdata $sock:afterid]
 
-        # get a free thread (might wait)
+        # Get a free thread. This call might wait if max_threads was reached.
         set tid [get_thread]
         
-        # set up the worker thread
+        # Set up and invoke the worker thread by transferring the client socket
+        # to the thread and setting up the necessary state data.
         thread::transfer $tid $sock
         thread::send $tid [list set dhelpers $::dhelpers]
         thread::send $tid [list set sock  $sock]
         thread::send $tid [list set conf  $conf]
         thread::send $tid [list set head  [dget $cdata $sock:head]]
         thread::send $tid [list set body  [string range [dget $cdata $sock:data] [expr {[dget $cdata $sock:bbeg] - 1}] [expr {[dget $cdata $sock:bbeg] -1 + [dget $cdata $sock:blen]}]]]
+        thread::send -async $tid $worker_script
 
-        thread::send -async $tid {
-
-            eval $dhelpers
-
-            namespace eval ::scgi:: {
-
-                variable out_head {}
-                variable out_body {}
-                variable flushed  0
-
-                ##
-                # Quit with an error
-                #
-                proc die {{msg {}}} {
-                    ::scgi::header Status {500 Internal server error} false
-                    if {$msg ne {}} {
-                        puts "<pre>$msg</pre>"
-                    } else {
-                        puts "<pre>$::errorInfo</pre>"
-                    }
-                    flush
-                    tailcall uplevel return
-                }
-
-                ##
-                # Locate the script to parse
-                #
-                proc locate_script {} {
-                    set droot [dget? $::head DOCUMENT_ROOT]
-                    set duri  [regsub {^/} [dget? $::head DOCUMENT_URI] {}]
-                    set sname [regsub {^/} [dget? $::head SCRIPT_NAME] {}]
-                    set pinfo [regsub {^/} [dget? $::head PATH_INFO] {}]
-
-                    # If no script_path (-s) argument was provided, use DOCUMENT_ROOT
-                    # as a base. Then try to append, in order:
-                    # - DOCUMENT_URI
-                    # - SCRIPT_NAME
-                    # - PATH_INFO
-                    # - index.tcl
-                    set script [dget? $::conf script_path]
-                    if {$script eq {}} {
-                        set script $droot
-                    }
-
-                    set sfound 0
-                    foreach trial [list $duri $sname $pinfo index.tcl] {
-                        set script [file join $script $trial]
-                        if {[file isfile $script] && [file exists $script] && [file readable $script]} {
-                            set sfound 1
-                            break
-                        }
-                    }
-
-                    if {!$sfound} {
-                        ::scgi::header Status {404 Not found}
-                        die "Could not find $script on the server"
-                    }
-
-                    return $script
-                }
-
-                ##
-                # Handle the request
-                #
-                proc handle {} {
-                    # decode the parameters (might be in both query string and body)
-                    # and create a dictionary of parameters
-                    set plist [dget? $::head QUERY_STRING]
-                    if {[dexists $::head HTTP_CONTENT_TYPE] && [dget $::head HTTP_CONTENT_TYPE] eq {application/x-www-form-urlencoded}} {
-                        if {$::body ne {}} {
-                            lappend plist $::body
-                        }
-                    }
-                    set params {}
-                    foreach {k v} [split $plist {& =}] {
-                        lappend params [::scgi::decode $k] [::scgi::decode $v]
-                    }
-
-                    # locate the script to parse
-                    set script [locate_script]
-
-                    # create the interpreter that will be used to
-                    # eval the code inside the script
-                    set int [interp create]
-                    $int bgerror ::scgi::die
-
-                    # Go into the directory where the script is
-                    set dir [file normalize [file dirname $script]]
-                    if {[catch {$int eval cd $dir}]} {
-                        die
-                    }
-
-                    # Close the standard I/O channels
-                    $int eval chan close stdin
-                    $int eval chan close stdout
-                    $int eval chan close stderr
-
-                    # Setup aliases in the ::scgi::namespace
-                    interp alias $int @                {} ::scgi::puts
-                    interp alias $int ::scgi::header   {} ::scgi::header
-                    interp alias $int ::scgi::flush    {} ::scgi::flush
-                    interp alias $int ::scgi::die      {} ::scgi::die
-                    interp alias $int ::scgi::exit     $int set ::scgi::terminate 1
-                    interp alias $int exit             $int set ::scgi::terminate 1
-
-                    # the following is an alias that's transparent to the user
-                    # and is employed to output XML tags, e.g.:
-                    # <?xml version="1.0" encoding="utf-8"?>
-                    interp alias $int xml              {} ::scgi::xml
-
-                    # Create variables that can be used within the client script
-                    $int eval [list set ::scgi::params  $params] ;# params was built just above
-                    $int eval [list set ::scgi::headers $::head]
-                    $int eval [list set ::scgi::body    $::body]
-                    $int eval [list set ::scgi::terminate 0]
-
-                    # Reset the ::errorInfo variable
-                    set ::errorInfo {}
-
-                    # State in the finite state machine:
-                    # 0 - HTML code
-                    # 1 - Tcl code
-                    set fsmState 0
-                    set tclCode {}
-                    set fd [open $script r]
-                    set lineNo 0
-
-                    while {[gets $fd line] >= 0} {
-                        incr lineNo
-
-                        set moreScripts 1
-                        set scanIdx 0
-                        while {$moreScripts && ![$int eval set ::scgi::terminate]} {
-
-                            set begIdx [string first "<?" $line $scanIdx]
-                            set endIdx [string first "?>" $line $scanIdx]
-
-                            # The following cases are possible, with
-                            # a != -1, b != -1, a < b
-                            # | branch | $begIdx | $endIdx | meaning
-                            # |   A    |   -1    |   -1    | fsmState == 0 ? pure HTML line : pure Tcl line
-                            # |   B    |    a    |   -1    | start of a multi-line script. fsmState must be 0. Set fsmState to 1
-                            # |   C    |   -1    |    b    | end of a multi-line script. fsmState must be 1. Set fsmState to 0
-                            # |   D    |    a    |    b    | script fully enclosed. fsmState must be 0 and remains 0.
-                            # |   E    |    b    |    a    | end of a multi-line script, beginning of another script. fsmState must be 1 and remains 1
-                            #
-                            if {$begIdx == -1 && $endIdx == -1} { ; # ...
-                                # A
-                                if {$fsmState == 0} {
-                                    ::scgi::puts [string range $line $scanIdx end]
-                                } else {
-                                    append tclCode [string range $line $scanIdx end] "\n"
-                                    if {[info complete $tclCode]} {
-                                        if {[catch {$int eval $tclCode}]} {
-                                            close $fd
-                                            die
-                                        }
-                                        set tclCode {}
-                                    }
-                                }
-                                set moreScripts 0
-
-                            } elseif {$begIdx != -1 && $endIdx == -1} { ; # <? ...
-                                # B
-                                if {$fsmState != 0} {
-                                    close $fd
-                                    die "$script:$lineNo -- invalid begin of nested <? ... ?> block"
-                                }
-                                append tclCode [string range $line $begIdx+2 end] "\n"
-                                set fsmState 1
-                                set moreScripts 0
-
-                            } elseif {$begIdx == -1 && $endIdx != -1} { ; # ... ?>
-                                # C
-                                if {$fsmState != 1} {
-                                    close $fd
-                                    die "$script:$lineNo -- invalid end of <? ... ?> block"
-                                }
-                                set fsmState 0
-                                append tclCode [string range $line $scanIdx $endIdx-1]
-                                if {[catch {$int eval $tclCode}]} {
-                                    close $fd
-                                    die
-                                }
-                                set tclCode {}
-                                ::scgi::puts [string range $line $endIdx+2 end]
-                                set moreScripts 0
-
-                            } elseif {$begIdx < $endIdx} { ; # <? ... ?>
-                                # D
-                                if {$fsmState != 0} {
-                                    die "$script:$lineNo -- invalid nested <? ... ?> block"
-                                    close $fd
-                                    return
-                                }
-                                ::scgi::puts [string range $line $scanIdx $begIdx-1]
-                                if {[catch {$int eval [string range $line $begIdx+2 $endIdx-1]}]} {
-                                    close $fd
-                                    die
-                                }
-                                set scanIdx $endIdx+2
-                                set moreScripts 1
-
-                            } elseif {$begIdx > $endIdx} { ; # ... ?> ... <?
-                                # E
-                                if {$fsmState !=1 } {
-                                    die "$script:$lineNo -- invalid end of <? ... ?> block"
-                                    close $fd
-                                    return
-                                }
-                                append tclCode [string range $line $scanIdx $endIdx-1]
-                                if {[catch {$int eval $tclCode}]} {
-                                    close $fd
-                                    die
-                                }
-                                set tclCode {}
-                                ::scgi::puts [string range $line $endIdx+2 $begIdx-1]
-                                set scanIdx $begIdx+2
-                                set moreScripts 1
-                            } else {
-                                close $fd
-                                die "$script:$lineNo -- error parsing input"
-                            }
-
-                            if {!$moreScripts} {
-                                break
-                            }
-                        }
-
-                        if {$fsmState == 0} {
-                            puts "\n"
-                        }
-                    }
-                    close $fd
-                }
-
-                ##
-                # Decode a www-url-encoded string (from ncgi module)
-                proc decode {str} {
-                    # rewrite "+" back to space
-                    # protect \ from quoting another '\'
-                    set str [string map [list + { } "\\" "\\\\" \[ \\\[ \] \\\]] $str]
-
-                    # prepare to process all %-escapes
-                    regsub -all -- {%([Ee][A-Fa-f0-9])%([89ABab][A-Fa-f0-9])%([89ABab][A-Fa-f0-9])} \
-                        $str {[encoding convertfrom utf-8 [binary decode hex \1\2\3]]} str
-                    regsub -all -- {%([CDcd][A-Fa-f0-9])%([89ABab][A-Fa-f0-9])}                     \
-                        $str {[encoding convertfrom utf-8 [binary decode hex \1\2]]} str
-                    regsub -all -- {%([0-7][A-Fa-f0-9])} $str {\\u00\1} str
-
-                    # process \u unicode mapped chars
-                    return [subst -novar $str]
-                }
-
-                ##
-                # Add a header to the response (buffered)
-                proc header {key value {replace 1}} {
-                    variable out_head
-                    variable flushed
-
-                    if {$flushed} {
-                        return
-                    }
-
-                    set k [string totitle [string trim $key]]
-                    set v [string trim $value]
-
-                    if {[dexists $out_head $k] && [string is false $replace]} {
-                        return
-                    }
-
-                    # Handle a couple of special headers
-                    switch $k {
-                        Location {
-                            header Status {302 Found}
-                        }
-                    }
-                    dset out_head $k $v
-                }
-
-                ##
-                # Append data to the response (buffered)
-                proc puts {data} {
-                    variable out_body
-                    variable flushed
-                    if {!$flushed} {
-                        append out_body $data
-                    }
-                }
-
-                ##
-                # Create an XML tag
-                proc xml {args} {
-                    set xml "<?xml"
-                    foreach a $args {
-                        append xml " $a"
-                    }
-                    append xml "?>"
-                    puts $xml
-                }
-
-                ##
-                # Flush any output (headers and body) waiting
-                # on the output buffer. If we get here, at least
-                # the Status header has been set.
-                proc flush {} {
-                    variable out_head
-                    variable out_body
-                    variable flushed
-
-                    if {$flushed} {
-                        return
-                    }
-
-                    set out {}
-
-                    # Set Status and Content-type, if not set yet
-                    header Status {200} false
-                    header Content-type {text/html} false
-                    header Content-length [expr {[string bytelength $out_body]}]
-
-                    # Output the headers
-                    foreach {k v} $out_head {
-                        append out "$k: $v\n"
-                    }
-
-                    # Output the body
-                    append out "\n$out_body"
-
-                    # Flush
-                    ::puts -nonewline $::sock $out
-
-                    set flushed 1
-
-                    catch {close $::sock}
-                }
-
-            }
-
-            ::scgi::handle
-            ::scgi::flush
-
-            tsv::lappend tsv freeThreads [thread::id]
-            thread::cond notify [tsv::get tsv cond]
-        }
-
+        # Cleanup this connection's state in the master thread. The worker
+        # thread is going to handle it from now on.
         cleanup $sock
     }
 }
