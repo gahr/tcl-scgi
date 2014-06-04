@@ -11,6 +11,9 @@
 # Additionally, startup flags might be defined as follows:
 # tcl_scgi_flags="-a 127.0.0.1 -p 9100"
 #
+# The user tcl-scgi must be run under might be defined as follows:
+# tcl_scgi_user="www"
+#
 
 . /etc/rc.subr
 
@@ -24,14 +27,16 @@ command_interpreter="/usr/local/bin/tclsh8.6"
 pidfile="/var/run/tcl-scgi.pid"
 start_cmd="tcl_scgi_start"
 stop_cmd="tcl_scgi_stop"
+tcl_scgi_user=${tcl_scgi_user:-root}
 
 tcl_scgi_start()
 {
     check_startmsgs && echo -n "Starting $name"
-    $command $tcl_scgi_flags -f > $pidfile
+    pid=$(su -m $tcl_scgi_user -c "$command $tcl_scgi_flags -f")
     if [ $? -ne 0 ]; then
         return 1
     fi
+    echo $pid > $pidfile
 
     check_startmsgs && echo "."
     return 0
