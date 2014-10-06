@@ -11,7 +11,7 @@
 # Additionally, startup flags might be defined as follows:
 # tcl_scgi_flags="-a 127.0.0.1 -p 9100"
 #
-# The user tcl-scgi must be run under might be defined as follows:
+# To run the server under a different user, define the following:
 # tcl_scgi_user="www"
 #
 
