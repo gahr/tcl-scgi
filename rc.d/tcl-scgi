@@ -14,6 +14,9 @@
 # To run the server under a different user, define the following:
 # tcl_scgi_user="www"
 #
+# The location of the scgi.tcl location might be specified as well:
+# tcl_scgi_path="/usr/local/www/scgi.tcl"
+#
 
 . /etc/rc.subr
 
@@ -22,12 +25,14 @@ rcvar=tcl_scgi_enable
 
 load_rc_config "$name"
 
-command="/usr/local/www/scgi.tcl"
+tcl_scgi_user=${tcl_scgi_user:-root}
+tcl_scgi_path=${tcl_scgi_path:-/usr/local/www/scgi.tcl}
+
+command="$tcl_scgi_path"
 command_interpreter="/usr/local/bin/tclsh8.6"
 pidfile="/var/run/tcl-scgi.pid"
 start_cmd="tcl_scgi_start"
 stop_cmd="tcl_scgi_stop"
-tcl_scgi_user=${tcl_scgi_user:-root}
 
 tcl_scgi_start()
 {
