@@ -76,6 +76,7 @@ namespace eval ::scgi:: {
 
         namespace eval ::scgi:: {
 
+            variable has_ncgi [expr {[catch {package require ncgi}] == 0}]
             variable out_head {}
             variable out_body {}
             variable flushed  0
@@ -132,14 +133,34 @@ namespace eval ::scgi:: {
             ##
             # Handle the request
             proc handle {} {
-                # decode the parameters (might be in both query string and body)
-                # and create a dictionary of parameters
+                variable has_ncgi
+
+                # decode query string parameters
                 set plist [dget? $::head QUERY_STRING]
-                if {[dexists $::head HTTP_CONTENT_TYPE] && [dget $::head HTTP_CONTENT_TYPE] eq {application/x-www-form-urlencoded}} {
-                    if {$::body ne {}} {
-                        lappend plist $::body
+
+                # default uploaded files to nothing
+                set files {}
+
+                # Parse content type. Two types are currently supported:
+                # application/x-www-form-urlencoded --> appended to "params"
+                # multipart/form-data --> decoded into "files"
+                set content_type [dget? $::head HTTP_CONTENT_TYPE]
+                switch -glob $content_type {
+                    {application/x-www-form-urlencoded} {
+                        # decode form-urlencoded parameters
+                        if {$::body ne {}} {
+                            lappend plist $::body
+                        }
+                    }
+                    {multipart/form-data*} {
+                        # decode multipart MIME data
+                        if {$has_ncgi} {
+                            set files [::ncgi::multipart $content_type $::body]
+                        }
                     }
                 }
+
+                # Get params
                 set params {}
                 foreach {k v} [split $plist {& =}] {
                     lappend params [::scgi::decode $k] [::scgi::decode $v]
@@ -178,7 +199,8 @@ namespace eval ::scgi:: {
                 interp alias $int xml              {} ::scgi::xml
 
                 # Create variables that can be used within the client script
-                $int eval [list set ::scgi::params  $params] ;# params was built just above
+                $int eval [list set ::scgi::params  $params]
+                $int eval [list set ::scgi::files   $files]
                 $int eval [list set ::scgi::headers $::head]
                 $int eval [list set ::scgi::body    $::body]
                 $int eval [list set ::scgi::terminate 0]
