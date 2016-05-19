@@ -95,7 +95,11 @@ Additionally, the following variables are available to client scripts:
         A dictionary with the request headers.
 
     ::scgi::body
-        The URL-encoded request body.
+        The raw request body.
+
+    ::scgi::files
+        The decoded body of a multipart/form-data request. The data format is explained in tcllib's ncgi
+        <a href="http://core.tcl.tk/tcllib/doc/trunk/embedded/www/tcllib/files/modules/ncgi/ncgi.html#11">documentation</a>.
 
 Short tags are also available by using a combination of an opening tag &lt;? and @ command:
 
