@@ -79,6 +79,7 @@ namespace eval ::scgi:: {
             variable has_ncgi [expr {[catch {package require ncgi}] == 0}]
             variable out_head {}
             variable out_body {}
+            variable in_params {}
             variable flushed  0
 
             ##
@@ -86,9 +87,9 @@ namespace eval ::scgi:: {
             proc die {{msg {}}} {
                 ::scgi::header Status {500 Internal server error} false
                 if {$msg ne {}} {
-                    puts "<pre>$msg</pre>"
+                    ::scgi::puts "<pre>$msg</pre>"
                 } else {
-                    puts "<pre>$::errorInfo</pre>"
+                    ::scgi::puts "<pre>$::errorInfo</pre>"
                 }
                 flush
                 tailcall uplevel return
@@ -133,17 +134,17 @@ namespace eval ::scgi:: {
             ##
             # Handle the request
             proc handle {} {
+                variable in_params
                 variable has_ncgi
 
-                # decode query string parameters
+                #
+                # Build the params dictionary, composed of the query string and
+                # the body.
+
+                # Decode query string parameters
                 set plist [dget? $::head QUERY_STRING]
 
-                # default uploaded files to nothing
-                set files {}
-
-                # Parse content type. Two types are currently supported:
-                # application/x-www-form-urlencoded --> appended to "params"
-                # multipart/form-data --> decoded into "files"
+                # Parse content type
                 set content_type [dget? $::head HTTP_CONTENT_TYPE]
                 switch -glob $content_type {
                     {application/x-www-form-urlencoded} {
@@ -155,15 +156,18 @@ namespace eval ::scgi:: {
                     {multipart/form-data*} {
                         # decode multipart MIME data
                         if {$has_ncgi} {
-                            set files [::ncgi::multipart $content_type $::body]
+                            set parts [::ncgi::multipart $content_type $::body]
+                            foreach {name props} $parts {
+                                dict set in_params $name $props
+                            }
                         }
                     }
                 }
 
-                # Get params
-                set params {}
+                # Parse url-encoded parameters - can come from query string and
+                # body.
                 foreach {k v} [split $plist {& =}] {
-                    lappend params [::scgi::decode $k] [::scgi::decode $v]
+                    dict set in_params [::scgi::decode $k] [::scgi::decode $v]
                 }
 
                 # locate the script to parse
@@ -188,6 +192,7 @@ namespace eval ::scgi:: {
                 # Setup aliases in the ::scgi::namespace
                 interp alias $int @                {} ::scgi::puts
                 interp alias $int ::scgi::header   {} ::scgi::header
+                interp alias $int ::scgi::param    {} ::scgi::param
                 interp alias $int ::scgi::flush    {} ::scgi::flush
                 interp alias $int ::scgi::die      {} ::scgi::die
                 interp alias $int ::scgi::exit     $int set ::scgi::terminate 1
@@ -199,8 +204,6 @@ namespace eval ::scgi:: {
                 interp alias $int xml              {} ::scgi::xml
 
                 # Create variables that can be used within the client script
-                $int eval [list set ::scgi::params  $params]
-                $int eval [list set ::scgi::files   $files]
                 $int eval [list set ::scgi::headers $::head]
                 $int eval [list set ::scgi::body    $::body]
                 $int eval [list set ::scgi::terminate 0]
@@ -214,9 +217,11 @@ namespace eval ::scgi:: {
                 set fsmState 0
                 set tclCode {}
                 set fd [open $script r]
+                set data [read $fd]
+                close $fd
                 set lineNo 0
 
-                while {[gets $fd line] >= 0} {
+                foreach line [split $data "\n"] {
                     incr lineNo
 
                     set moreScripts 1
@@ -243,7 +248,6 @@ namespace eval ::scgi:: {
                                 append tclCode [string range $line $scanIdx end] "\n"
                                 if {[info complete $tclCode]} {
                                     if {[catch {$int eval $tclCode}]} {
-                                        close $fd
                                         die
                                     }
                                     set tclCode {}
@@ -254,7 +258,6 @@ namespace eval ::scgi:: {
                         } elseif {$begIdx != -1 && $endIdx == -1} { ; # <? ...
                             # B
                             if {$fsmState != 0} {
-                                close $fd
                                 die "$script:$lineNo -- invalid begin of nested <? ... ?> block"
                             }
                             append tclCode [string range $line $begIdx+2 end] "\n"
@@ -264,13 +267,11 @@ namespace eval ::scgi:: {
                         } elseif {$begIdx == -1 && $endIdx != -1} { ; # ... ?>
                             # C
                             if {$fsmState != 1} {
-                                close $fd
                                 die "$script:$lineNo -- invalid end of <? ... ?> block"
                             }
                             set fsmState 0
                             append tclCode [string range $line $scanIdx $endIdx-1]
                             if {[catch {$int eval $tclCode}]} {
-                                close $fd
                                 die
                             }
                             set tclCode {}
@@ -281,12 +282,9 @@ namespace eval ::scgi:: {
                             # D
                             if {$fsmState != 0} {
                                 die "$script:$lineNo -- invalid nested <? ... ?> block"
-                                close $fd
-                                return
                             }
                             ::scgi::puts [string range $line $scanIdx $begIdx-1]
                             if {[catch {$int eval [string range $line $begIdx+2 $endIdx-1]}]} {
-                                close $fd
                                 die
                             }
                             set scanIdx $endIdx+2
@@ -296,12 +294,9 @@ namespace eval ::scgi:: {
                             # E
                             if {$fsmState !=1 } {
                                 die "$script:$lineNo -- invalid end of <? ... ?> block"
-                                close $fd
-                                return
                             }
                             append tclCode [string range $line $scanIdx $endIdx-1]
                             if {[catch {$int eval $tclCode}]} {
-                                close $fd
                                 die
                             }
                             set tclCode {}
@@ -309,20 +304,18 @@ namespace eval ::scgi:: {
                             set scanIdx $begIdx+2
                             set moreScripts 1
                         } else {
-                            close $fd
-                            die "$script:$lineNo -- error parsing input"
+                                die "$script:$lineNo -- error parsing input"
+                            }
+
+                            if {!$moreScripts} {
+                                break
+                            }
                         }
 
-                        if {!$moreScripts} {
-                            break
+                        if {$fsmState == 0} {
+                            ::scgi::puts "\n"
                         }
                     }
-
-                    if {$fsmState == 0} {
-                        puts "\n"
-                    }
-                }
-                close $fd
             }
 
             ##
@@ -341,6 +334,50 @@ namespace eval ::scgi:: {
 
                 # process \u unicode mapped chars
                 return [subst -novar $str]
+            }
+
+            ##
+            # Retrieve information on the request parameters
+            # -names          Return the list of parameter names
+            # -headers param  Return a dictionary of params's headers
+            # param ?header?  Return param's header or its body, if header is
+            #                 not specified
+            #
+            proc param {args} {
+                variable in_params
+                set usage {wrong # args: should be\
+                    "::scgi::param (-names | -headers param | param ?header?)"}
+
+                lassign $args p1 p2
+                if {$p1 eq {-names}} {
+                    return [dict keys $in_params]
+                } elseif {$p1 eq {-headers}} {
+                    if {$p2 eq {}} {
+                        return -code error $usage
+                    }
+                    set p [dget $in_params $p2]
+                    if {[llength $p] == 1} {
+                        return {}
+                    } else {
+                        return [lindex $p 0]
+                    }
+                } else {
+                    set p [dget $in_params $p1]
+                    set l [llength $p]
+                    if {$p2 eq {}} {
+                        if {$l == 1} {
+                            return $p
+                        } else {
+                            return [lindex $p 1]
+                        }
+                    } else {
+                        if {$l == 1} {
+                            return {}
+                        } else {
+                           return [dget [lindex $p 0] $p2]
+                        }
+                    }
+                }
             }
 
             ##
@@ -387,7 +424,7 @@ namespace eval ::scgi:: {
                     append xml " $a"
                 }
                 append xml "?>"
-                puts $xml
+                ::scgi::puts $xml
             }
 
             ##
@@ -403,12 +440,12 @@ namespace eval ::scgi:: {
                     return
                 }
 
-                set out {}
+                set utf8_body [encoding convertto utf-8 $out_body]
 
                 # Set Status and Content-type, if not set yet
                 header Status {200} false
-                header Content-type {text/html} false
-                header Content-length [expr {[string bytelength $out_body]}]
+                header Content-type {text/html;charset=utf-8} false
+                #header Content-length [expr {[string length $utf8_body] + 2}]
 
                 # Output the headers
                 foreach {k v} $out_head {
@@ -416,7 +453,7 @@ namespace eval ::scgi:: {
                 }
 
                 # Output the body
-                append out "\n$out_body"
+                append out "\n$utf8_body"
 
                 # Flush
                 ::puts -nonewline $::sock $out
