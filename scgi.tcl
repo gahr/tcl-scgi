@@ -1,7 +1,7 @@
-#!/usr/local/bin/tclsh8.6
+#!/usr/local/bin/tclsh8.7
 
 #
-#  Copyright (C) 2013, 2014 Pietro Cerutti <gahr@gahr.ch>
+#  Copyright (C) 2013-2020 Pietro Cerutti <gahr@gahr.ch>
 #  
 #  Redistribution and use in source and binary forms, with or without
 #  modification, are permitted provided that the following conditions
@@ -45,13 +45,8 @@ package require Thread 2.7
 # Dict helpers
 set dhelpers {
 
-    # http://wiki.tcl.tk/22807
     proc ::tcl::dict::get? {args} {
-        try {
-            return [dict get {*}$args]
-        } on error message {
-            return {}
-        }
+        dict getdef {*}$args {}
     }
     namespace ensemble configure dict -map [dict merge [namespace ensemble configure dict -map] {get? ::tcl::dict::get?}]
 
@@ -192,7 +187,6 @@ namespace eval ::scgi:: {
                 # Setup aliases in the ::scgi::namespace
                 interp alias $int @                {} ::scgi::puts
                 interp alias $int ::scgi::header   {} ::scgi::header
-                interp alias $int ::scgi::param    {} ::scgi::param
                 interp alias $int ::scgi::flush    {} ::scgi::flush
                 interp alias $int ::scgi::die      {} ::scgi::die
                 interp alias $int ::scgi::exit     $int set ::scgi::terminate 1
@@ -204,6 +198,7 @@ namespace eval ::scgi:: {
                 interp alias $int xml              {} ::scgi::xml
 
                 # Create variables that can be used within the client script
+                $int eval [list set ::scgi::params  $in_params]
                 $int eval [list set ::scgi::headers $::head]
                 $int eval [list set ::scgi::body    $::body]
                 $int eval [list set ::scgi::terminate 0]
@@ -334,53 +329,6 @@ namespace eval ::scgi:: {
 
                 # process \u unicode mapped chars
                 return [subst -novar $str]
-            }
-
-            ##
-            # Retrieve information on the request parameters
-            # -names          Return the list of parameter names
-            # -headers param  Return a dictionary of params's headers
-            # param ?header?  Return param's header or its body, if header is
-            #                 not specified
-            #
-            proc param {args} {
-                variable in_params
-                set usage {wrong # args: should be\
-                    "::scgi::param (-names | -headers param | param ?header?)"}
-
-                lassign $args p1 p2
-                if {$p1 eq {-names}} {
-                    return [dict keys $in_params]
-                } elseif {$p1 eq {-headers}} {
-                    if {$p2 eq {}} {
-                        return -code error $usage
-                    }
-                    set p [dget? $in_params $p2]
-                    if {[llength $p] == 1} {
-                        return {}
-                    } else {
-                        return [lindex $p 0]
-                    }
-                } else {
-                    set p [dget? $in_params $p1]
-                    if {$p eq {}} {
-                        return {}
-                    }
-                    set l [llength $p]
-                    if {$p2 eq {}} {
-                        if {$l == 1} {
-                            return $p
-                        } else {
-                            return [lindex $p 1]
-                        }
-                    } else {
-                        if {$l == 1} {
-                            return {}
-                        } else {
-                           return [dget [lindex $p 0] $p2]
-                        }
-                    }
-                }
             }
 
             ##
