@@ -355,14 +355,17 @@ namespace eval ::scgi:: {
                     if {$p2 eq {}} {
                         return -code error $usage
                     }
-                    set p [dget $in_params $p2]
+                    set p [dget? $in_params $p2]
                     if {[llength $p] == 1} {
                         return {}
                     } else {
                         return [lindex $p 0]
                     }
                 } else {
-                    set p [dget $in_params $p1]
+                    set p [dget? $in_params $p1]
+                    if {$p eq {}} {
+                        return {}
+                    }
                     set l [llength $p]
                     if {$p2 eq {}} {
                         if {$l == 1} {
