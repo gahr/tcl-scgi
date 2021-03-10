@@ -20,7 +20,11 @@ The result of the following example can be seen <a href="https://www.ptrcrt.ch/e
                 set lvl 0
                 while {$lvl <= 255} {
                     set color "#[string range [format %02X $lvl] 3]"
-                    @ "<td style=\"background-color: $color; width: 20px; height: 20px\" title=\"$color\">&nbsp;</td>\n"
+                    @ [::scgi::html::td \
+                        [list style "background-color: $color; width: 20px; height: 20px" \
+                              title $color] \
+                        {}]
+                    @ "\n"
                     if {[incr lvl] % 16 == 0 && $lvl != 256} {
                         @ "</tr>\n<tr>\n"
                     }
@@ -41,20 +45,20 @@ Fork and return the pid of the child process. Useful in startup scripts.
 `-m max_threads`
 
 Maximum number of threads that can be handling requests at any given time.
-    
+
 `-p port`
 
 Listen on the specified port number.
-    
+
 `-s script_path`
 
 Use this path as a search base for scripts. If it's not set, the DOCUMENT_ROOT set by the HTTP server is used instead.
-    
+
 `-t timeout`
 
 Kill an idle connection after timeout seconds. Idle connections are those on which we are still waiting for data.
 Once the end script is called, a connection is no more killable.
-    
+
 `-v`
 
 Dump verbose information.
@@ -73,16 +77,16 @@ Synonym to `[puts]`. The argument is evaluated by Tcl if it's not enclosed in br
 @ "Using Tcl version [tcl patchlevel]"
 @ {Here [square brakets] are dumped literally}
 ```
-   
+
 `::scgi::header key value ?replace?`
 
 Append the header "Key: value" to the output buffer. If replace is true (the default), a previous header with
 the same key is replaced by the one specified.
-    
+
 `::scgi::flush`
 
 Send the output buffered (including headers and body data) to the client and close the connection. Once called,
-no further output is possible, but the script stays alive and can continue processing data. 
+no further output is possible, but the script stays alive and can continue processing data.
 
 `::scgi::die msg`
 
