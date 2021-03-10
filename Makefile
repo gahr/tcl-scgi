@@ -1,7 +1,7 @@
 # vim: set ts=8:
 #
 SCRIPT=	combine.awk
-SRCS=	src/dbhelpers.tcl src/run.tcl src/server.tcl src/worker.tcl
+SRCS=	src/dhelpers.tcl src/run.tcl src/server.tcl src/worker.tcl
 IN=	scgi.tcl.in
 OUT=	scgi.tcl
 
