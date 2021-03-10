@@ -41,7 +41,7 @@ set version [list 0 1 0]
 package require Tcl 8.6
 package require Thread 2.7
 
-@dbhelpers.tcl@
+@dhelpers.tcl@
 @worker.tcl@
 @server.tcl@
 @run.tcl@
