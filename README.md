@@ -89,8 +89,6 @@ Additionally, the following variables are available to client scripts:
 
 **`::scgi::body`** The raw request body.
 
-**`::scgi::files`** The decoded body of a multipart/form-data request. The data format is explained in tcllib's ncgi documentation.
-
 Short tags are also available by using a combination of an opening tag &lt;? and @ command. Example
 ```
 Running Tcl version <?@ [info patchlevel] ?>
