@@ -38,30 +38,18 @@ The result of the following example can be seen <a href="https://www.ptrcrt.ch/e
 
 The handler can be invoked with the following arguments:
 
-`-f`
+**`-f`** Fork and return the pid of the child process. Useful in startup scripts.
 
-Fork and return the pid of the child process. Useful in startup scripts.
+**`-m max_threads`** Maximum number of threads that can be handling requests at any given time.
 
-`-m max_threads`
+**`-p port`** Listen on the specified port number.
 
-Maximum number of threads that can be handling requests at any given time.
+**`-s script_path`** Use this path as a search base for scripts. If it's not set, the DOCUMENT_ROOT set by the HTTP server is used instead.
 
-`-p port`
+**`-t timeout`** Kill an idle connection after timeout seconds. Idle connections are those on which we are still waiting for data. Once the end script is called, a connection is no more killable.
 
-Listen on the specified port number.
+**`-v`** Dump verbose information.
 
-`-s script_path`
-
-Use this path as a search base for scripts. If it's not set, the DOCUMENT_ROOT set by the HTTP server is used instead.
-
-`-t timeout`
-
-Kill an idle connection after timeout seconds. Idle connections are those on which we are still waiting for data.
-Once the end script is called, a connection is no more killable.
-
-`-v`
-
-Dump verbose information.
 
 ## Scripts
 
@@ -69,45 +57,24 @@ User scripts consist of pure HTML code with interleaved Tcl scripts enclosed in 
 
 The following special commands are available:
 
-`@ arg`
-
-Synonym to `[puts]`. The argument is evaluated by Tcl if it's not enclosed in braces. Example:
+**`@ arg`** Synonym to `[puts]`. The argument is evaluated by Tcl if it's not enclosed in braces. Example:
 ```
 @ [info hostname]
 @ "Using Tcl version [tcl patchlevel]"
 @ {Here [square brakets] are dumped literally}
 ```
 
-`::scgi::header key value ?replace?`
+**`::scgi::header key value ?replace?`** Append the header "Key: value" to the output buffer. If replace is true (the default), a previous header with the same key is replaced by the one specified.
 
-Append the header "Key: value" to the output buffer. If replace is true (the default), a previous header with
-the same key is replaced by the one specified.
+**`::scgi::flush`**  Send the output buffered (including headers and body data) to the client and close the connection. Once called, no further output is possible, but the script stays alive and can continue processing data.
 
-`::scgi::flush`
+**`::scgi::die msg`** Output the message `msg` and quit. The Status header is set to 500 Internal Server Error.
 
-Send the output buffered (including headers and body data) to the client and close the connection. Once called,
-no further output is possible, but the script stays alive and can continue processing data.
+**`::scgi::exit`**  Send the output buffered (including headers and body data) to the client and terminate the execution of the current script. `[exit]` is aliased to `::scgi::exit` and can be used too.
 
-`::scgi::die msg`
+**`xml arg arg arg`**  Produce an xml tag. This command is transparent to the user. The line `<?xml version="1.0" encoding="utf-8"?>` is  a starting `<?` tag, an `xml` command, two arguments, and a closing `?>` tag.
 
-Output the message msg and quit. The Status header is set to 500 Internal Server Error.
-
-`::scgi::exit`
-
-Send the output buffered (including headers and body data) to the client and terminate the execution of the
-current script. `[exit]` is aliased to `::scgi::exit` and can be used too.
-
-`xml arg arg arg`
-
-Produce an xml tag. This command is transparent to the user. A line like the following
-`<?xml version="1.0" encoding="utf-8"?>` is really a starting `<?` tag, an `xml` command,
-two arguments, and a closing `?>` tag.
-
-`::scgi::html::* attrs children`
-
-The `html` namespace exposes commands named after the HTML tags. Each takes an optional
-(even) list of attributes as key-value pairs and an optional list of children. Example:
-
+**`::scgi::html::* attrs children`** The `html` namespace exposes commands named after the HTML tags. Each takes an optional (even) list of attributes as key-value pairs and an optional list of children. Example:
 ```
 namespace path scgi
 @ [html::a {title "Take me home" href https://example.com} \
@@ -116,24 +83,15 @@ namespace path scgi
 
 Additionally, the following variables are available to client scripts:
 
-`::scgi::params`
+**`::scgi::params`** A dictionary with the request parameters.
 
-A dictionary with the request parameters.
+**`::scgi::headers`** A dictionary with the request headers.
 
-`::scgi::headers`
+**`::scgi::body`** The raw request body.
 
-A dictionary with the request headers.
+**`::scgi::files`** The decoded body of a multipart/form-data request. The data format is explained in tcllib's ncgi documentation.
 
-`::scgi::body`
-
-The raw request body.
-
-`::scgi::files`
-
-The decoded body of a multipart/form-data request. The data format is explained in tcllib's ncgi documentation.
-
-Short tags are also available by using a combination of an opening tag &lt;? and @ command:
-
+Short tags are also available by using a combination of an opening tag &lt;? and @ command. Example
 ```
 Running Tcl version <?@ [info patchlevel] ?>
 ```
