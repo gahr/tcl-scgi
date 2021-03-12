@@ -15,4 +15,3 @@ set dhelpers {
     interp alias {} dincr   {} dict incr
     interp alias {} dexists {} dict exists
 }
-eval $dhelpers

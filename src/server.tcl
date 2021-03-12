@@ -3,6 +3,8 @@
 
 namespace eval server {
 
+    eval $::dhelpers
+
     ##
     # Configuration options
     variable conf {}
@@ -300,12 +302,22 @@ namespace eval server {
         # Set up and invoke the worker thread by transferring the client socket
         # to the thread and setting up the necessary state data.
         thread::transfer $tid $sock
-        thread::send $tid [list set dhelpers $::dhelpers]
-        thread::send $tid [list set sock  $sock]
-        thread::send $tid [list set conf  $conf]
-        thread::send $tid [list set head  [dget $cdata $sock:head]]
-        thread::send $tid [list set body  [string range [dget $cdata $sock:data] [expr {[dget $cdata $sock:bbeg] - 1}] [expr {[dget $cdata $sock:bbeg] -1 + [dget $cdata $sock:blen]}]]]
-        thread::send -async $tid $::worker::script
+
+        thread::send $tid $::dhelpers
+        thread::send $tid $::worker
+
+        thread::send $tid [list set sock $sock]
+        thread::send $tid [list set conf $conf]
+        thread::send $tid [list set head [dget $cdata $sock:head]]
+        thread::send $tid [list set body [string range [dget $cdata $sock:data] [expr {[dget $cdata $sock:bbeg] - 1}] [expr {[dget $cdata $sock:bbeg] -1 + [dget $cdata $sock:blen]}]]]
+
+        thread::send -async $tid {
+            ::scgi::handle
+            ::scgi::flush
+
+            tsv::lappend tsv freeThreads [thread::id]
+            thread::cond notify [tsv::get tsv cond]
+        }
 
         # Cleanup this connection's state in the master thread. The worker
         # thread is going to handle it from now on.
