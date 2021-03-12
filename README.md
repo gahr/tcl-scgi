@@ -64,7 +64,7 @@ The following special commands are available:
 @ {Here [square brakets] are dumped literally}
 ```
 
-**`::scgi::header key value ?replace?`** Append the header "Key: value" to the output buffer. If replace is true (the default), a previous header with the same key is replaced by the one specified.
+**`::scgi::header key value ?replace?`** Append the HTTP header "Key: value" to the output buffer. If replace is true (the default), a previous header with the same key is replaced by the one specified.
 
 **`::scgi::flush`**  Send the output buffered (including headers and body data) to the client and close the connection. Once called, no further output is possible, but the script stays alive and can continue processing data.
 
