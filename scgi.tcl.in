@@ -1,4 +1,4 @@
-#!/usr/local/bin/tclsh8.7
+#!@@TCLSHEXE@@
 
 #
 #  Copyright (C) 2013-2021 Pietro Cerutti <gahr@gahr.ch>
@@ -38,7 +38,7 @@
 
 set version [list 0 1 0]
 
-package require Tcl 8.6
+package require Tcl @@TCLVERSION@@
 package require Thread 2.7
 
 @dhelpers.tcl@
