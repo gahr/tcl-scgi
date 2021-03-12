@@ -8,7 +8,7 @@ namespace eval worker {
     set script {
         eval $dhelpers
 
-        set html {
+        namespace eval html {
 
             proc Tag {name attrs children} {
                 append out "<$name"
@@ -102,49 +102,9 @@ namespace eval worker {
             }
 
             ##
-            # Handle the request
-            proc handle {} {
-                variable in_params
-                variable has_ncgi
-
-                #
-                # Build the params dictionary, composed of the query string and
-                # the body.
-
-                # Decode query string parameters
-                set plist [dget? $::head QUERY_STRING]
-
-                # Parse content type
-                set content_type [dget? $::head HTTP_CONTENT_TYPE]
-                switch -glob $content_type {
-                    {application/x-www-form-urlencoded} {
-                        # decode form-urlencoded parameters
-                        if {$::body ne {}} {
-                            lappend plist $::body
-                        }
-                    }
-                    {multipart/form-data*} {
-                        # decode multipart MIME data
-                        if {$has_ncgi} {
-                            set parts [::ncgi::multipart $content_type $::body]
-                            foreach {name props} $parts {
-                                dict set in_params $name $props
-                            }
-                        }
-                    }
-                }
-
-                # Parse url-encoded parameters - can come from query string and
-                # body.
-                foreach {k v} [split $plist {& =}] {
-                    dict set in_params [::scgi::decode $k] [::scgi::decode $v]
-                }
-
-                # locate the script to parse
-                set script [locate_script]
-
-                # create the interpreter that will be used to
-                # eval the code inside the script
+            # Create and initialize the interpreter to handle the request
+            # script
+            proc make_interp {script params} {
                 set int [interp create]
                 $int bgerror ::scgi::die
 
@@ -167,23 +127,28 @@ namespace eval worker {
                 interp alias $int ::scgi::exit     $int set ::scgi::terminate 1
                 interp alias $int exit             $int set ::scgi::terminate 1
 
+                # Make the ::scgi::html namespace available
+                foreach p [info proc ::html::\[a-z\]*] {
+                    interp alias $int ::scgi$p {} $p
+                }
+
                 # the following is an alias that's transparent to the user
                 # and is employed to output XML tags, e.g.:
                 # <?xml version="1.0" encoding="utf-8"?>
                 interp alias $int xml              {} ::scgi::xml
 
                 # Create variables that can be used within the client script
-                $int eval [list set ::scgi::params  $in_params]
+                $int eval [list set ::scgi::params  $params]
                 $int eval [list set ::scgi::headers $::head]
                 $int eval [list set ::scgi::body    $::body]
                 $int eval [list set ::scgi::terminate 0]
 
-                # Make the ::scgi::html namespace available
-                $int eval [list namespace eval ::scgi::html $::html]
+                set int
+            }
 
-                # Reset the ::errorInfo variable
-                set ::errorInfo {}
-
+            ##
+            # Run the request script in the dedicated interpreter
+            proc run {script int} {
                 # State in the finite state machine:
                 # 0 - HTML code
                 # 1 - Tcl code
@@ -277,18 +242,65 @@ namespace eval worker {
                             set scanIdx $begIdx+2
                             set moreScripts 1
                         } else {
-                                die "$script:$lineNo -- error parsing input"
-                            }
-
-                            if {!$moreScripts} {
-                                break
-                            }
+                            die "$script:$lineNo -- error parsing input"
                         }
 
-                        if {$fsmState == 0} {
-                            ::scgi::puts "\n"
+                        if {!$moreScripts} {
+                            break
                         }
                     }
+
+                    if {$fsmState == 0} {
+                        ::scgi::puts "\n"
+                    }
+                }
+            }
+
+            ##
+            # Handle the request
+            proc handle {} {
+                variable in_params
+                variable has_ncgi
+
+                #
+                # Build the params dictionary, composed of the query string and
+                # the body.
+
+                # Decode query string parameters
+                set plist [dget? $::head QUERY_STRING]
+
+                # Parse content type
+                set content_type [dget? $::head HTTP_CONTENT_TYPE]
+                switch -glob $content_type {
+                    {application/x-www-form-urlencoded} {
+                        # decode form-urlencoded parameters
+                        if {$::body ne {}} {
+                            lappend plist $::body
+                        }
+                    }
+                    {multipart/form-data*} {
+                        # decode multipart MIME data
+                        if {$has_ncgi} {
+                            set parts [::ncgi::multipart $content_type $::body]
+                            foreach {name props} $parts {
+                                dict set in_params $name $props
+                            }
+                        }
+                    }
+                }
+
+                # Parse url-encoded parameters - can come from query string and
+                # body.
+                foreach {k v} [split $plist {& =}] {
+                    dict set in_params [::scgi::decode $k] [::scgi::decode $v]
+                }
+
+                set script [locate_script]
+                set int [make_interp $script $in_params]
+
+                set ::errorInfo {}
+
+                run $script $int
             }
 
             ##
@@ -301,7 +313,7 @@ namespace eval worker {
                 # prepare to process all %-escapes
                 regsub -all -- {%([Ee][A-Fa-f0-9])%([89ABab][A-Fa-f0-9])%([89ABab][A-Fa-f0-9])} \
                     $str {[encoding convertfrom utf-8 [binary decode hex \1\2\3]]} str
-                regsub -all -- {%([CDcd][A-Fa-f0-9])%([89ABab][A-Fa-f0-9])}                     \
+                regsub -all -- {%([CDcd][A-Fa-f0-9])%([89ABab][A-Fa-f0-9])} \
                     $str {[encoding convertfrom utf-8 [binary decode hex \1\2]]} str
                 regsub -all -- {%([0-7][A-Fa-f0-9])} $str {\\u00\1} str
 
