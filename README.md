@@ -69,12 +69,12 @@ User scripts consist of pure HTML code with interleaved Tcl scripts enclosed in 
 
 The following special commands are available:
 
-`@ arg`
+`@ arg...`
 
-Synonym to `[puts]`. The argument is evaluated by Tcl if it's not enclosed in braces. Example:
+Synonym to `[puts]`, except it takes multiple arguments. The arguments are evaluated by Tcl if not enclosed in braces. Example:
 ```
 @ [info hostname]
-@ "Using Tcl version [tcl patchlevel]"
+@ "Using Tcl version " [info patchlevel]
 @ {Here [square brakets] are dumped literally}
 ```
 
