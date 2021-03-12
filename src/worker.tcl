@@ -345,11 +345,11 @@ set worker {
 
         ##
         # Append data to the response (buffered).
-        proc puts {data} {
+        proc puts {args} {
             variable out_body
             variable flushed
             if {!$flushed} {
-                append out_body $data
+                append out_body [join $args]
             }
         }
 
