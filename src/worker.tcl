@@ -45,7 +45,6 @@ set worker {
         variable has_ncgi [expr {[catch {package require ncgi}] == 0}]
         variable out_head {}
         variable out_body {}
-        variable in_params {}
         variable flushed  0
 
         ##
@@ -255,49 +254,50 @@ set worker {
         ##
         # Handle the request
         proc handle {} {
-            variable in_params
             variable has_ncgi
 
             #
             # Build the params dictionary, composed of the query string and
             # the body.
+            set params [dict create]
 
             # Decode query string parameters
-            set plist [dget? $::head QUERY_STRING]
+            scgi::parse_params [dget? $::head QUERY_STRING] params
 
             # Parse content type
             set content_type [dget? $::head HTTP_CONTENT_TYPE]
             switch -glob $content_type {
                 {application/x-www-form-urlencoded} {
                     # decode form-urlencoded parameters
-                    if {$::body ne {}} {
-                        lappend plist $::body
-                    }
+                    scgi::parse_params $::body params
                 }
                 {multipart/form-data*} {
                     # decode multipart MIME data
                     if {$has_ncgi} {
                         set parts [::ncgi::multipart $content_type $::body]
                         foreach {name props} $parts {
-                            dict set in_params $name $props
+                            dict set params $name $props
                         }
                     }
                 }
             }
 
-            # Parse url-encoded parameters - can come from query string and
-            # body.
-            foreach {k v} [split $plist {& =}] {
-                dict set in_params [::scgi::decode $k] [::scgi::decode $v]
-            }
-
             set script [locate_script]
-            set int [make_interp $script $in_params]
-
+            set int [make_interp $script $params]
             set ::errorInfo {}
-
             run $script $int
         }
+
+        # Parse url-encoded parameters
+        proc parse_params {params dictName} {
+            upvar $dictName d
+            foreach pair [split $params &] {
+                foreach {k v} [split $pair =] {
+                    dict set d [::scgi::decode $k] [::scgi::decode $v]
+                }
+            }
+        }
+
 
         ##
         # Decode a www-url-encoded string (from ncgi module).
