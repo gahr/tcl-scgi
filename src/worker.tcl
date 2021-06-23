@@ -40,6 +40,44 @@ set worker {
         }
     }
 
+    namespace eval cookie {
+        proc send {name value {props {}}} {
+            set allowed_props { Expired Max-Age Domain Path Secure HttpOnly 
+                                SameSite SameSite SameSite }
+            set allowed_values { SameSite {Strict Lax None} }
+            
+            set val "$name=$value"
+            dict for {k v} $props {
+                if {$k ni $allowed_props} {
+                    continue
+                }
+                set av [dget? $allowed_values $k]
+                if {$av ne {} && $v ni $av} {
+                    continue
+                }
+                append val ";$k"
+                if {$v ne {}} {
+                    append val "=$v"
+                }
+            }
+            ::scgi::header Set-Cookie $val
+        }
+
+        proc delete {name} {
+            send $name -delete- {Max-Age 0}
+        }
+
+        proc get {name} {
+            foreach cookie [split [dget? $::head HTTP_COOKIE] {;}] {
+                lassign [split $cookie {=}] k v
+                if {$k eq $name} {
+                    return $v
+                }
+            }
+            return {}
+        }
+    }
+
     namespace eval scgi {
 
         variable has_ncgi [expr {[catch {package require ncgi}] == 0}]
@@ -122,11 +160,8 @@ set worker {
             interp alias $int ::scgi::exit     $int set ::scgi::terminate 1
             interp alias $int exit             $int set ::scgi::terminate 1
 
-            # Make the ::scgi::html namespace available
-            foreach p [info proc ::html::\[a-z\]*] {
-                interp alias $int ::scgi$p {} $p
-            }
-
+            alias_namespace $int html
+            alias_namespace $int cookie
             # the following is an alias that's transparent to the user
             # and is employed to output XML tags, e.g.:
             # <?xml version="1.0" encoding="utf-8"?>
@@ -139,6 +174,14 @@ set worker {
             $int eval [list set ::scgi::terminate 0]
 
             set int
+        }
+
+        ##
+        # Alias a namespace in the slave interpreter
+        proc alias_namespace {int ns} {
+            foreach p [info proc "::${ns}::\[a-z\]*"] {
+                interp alias $int ::scgi$p {} $p
+            }
         }
 
         ##
