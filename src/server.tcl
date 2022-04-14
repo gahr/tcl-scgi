@@ -102,26 +102,32 @@ namespace eval server {
 
         for {set i 0} {$i < $::argc} {incr i} {
             switch [lindex $::argv $i] {
-                -a {
+                -a -
+                --addr {
                     dset conf addr [lindex $::argv [incr i]]
                 }
-                -m {
+                -m -
+                --max-threads {
                     dset conf max_threads [lindex $::argv [incr i]]
                 }
-                -p {
+                -p -
+                --port {
                     dset conf port [lindex $::argv [incr i]]
                 }
-                -s {
+                -s -
+                --script-path {
                     dset conf script_path [lindex $::argv [incr i]]
                 }
-                -t {
+                -t -
+                --timeout {
                     set t [lindex $::argv [incr i]]
                     if {![string is entier $t]} {
                         error "timeout must be an integer: $t given."
                     }
                     dset conf timeout [expr {$t * 1000}]
                 }
-                -v {
+                -v -
+                --verbose {
                     dset conf verbose true
                 }
                 -version {
