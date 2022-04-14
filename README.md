@@ -38,15 +38,21 @@ The result of the following example can be seen <a href="https://www.ptrcrt.ch/e
 
 The handler can be invoked with the following arguments:
 
+**`-a address | --addr address`** Address on which to listen.
+
 **`-f`** Fork and return the pid of the child process. Useful in startup scripts.
 
-**`-m max_threads`** Maximum number of threads that can be handling requests at any given time.
+**`-m num | --max-threads num`** Maximum number of threads that can be handling requests at any given time.
 
-**`-p port`** Listen on the specified port number.
+**`-i num | --min-threads num`** Minimum number of threads to keep alive.
 
-**`-s script_path`** Use this path as a search base for scripts. If it's not set, the DOCUMENT_ROOT set by the HTTP server is used instead.
+**`-l sec | --max-life sec`** Maximum number of seconds to keep a thread alive.
 
-**`-t timeout`** Kill an idle connection after timeout seconds. Idle connections are those on which we are still waiting for data. Once the end script is called, a connection is no more killable.
+**`-p port | --port port`** Listen on the specified port number.
+
+**`-s path | --script-path path`** Use this path as a search base for scripts. If it's not set, the DOCUMENT_ROOT set by the HTTP server is used instead.
+
+**`-t sec | --timeout sec`** Kill an idle connection after timeout seconds. Idle connections are those on which we are still waiting for data. Once the end script is called, a connection is no more killable.
 
 **`-v`** Dump verbose information.
 
