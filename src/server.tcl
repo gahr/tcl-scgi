@@ -56,7 +56,7 @@ namespace eval server {
 
         # if there's a free thread available, pick it
         tsv::lock tsv {
-            set tid [tsv::lindex tsv freeThreads end]
+            lassign [tsv::lindex tsv freeThreads end] tid ttime
             if {$tid ne {}} {
                 tsv::lpop tsv freeThreads end
                 return $tid
@@ -78,11 +78,48 @@ namespace eval server {
         }
         thread::mutex unlock [tsv::get tsv mutex]
         tsv::lock tsv {
-            set tid [tsv::lindex tsv freeThreads end]
+            lassign [tsv::lindex tsv freeThreads end] tid ttime
             tsv::lpop tsv freeThreads end
         }
 
         return $tid
+    }
+
+    ##
+    # Cleanup free threads that have been sleeping for long
+    proc cleanup_threads {sock} {
+        variable conf
+        variable nofThreads
+
+        tsv::lock tsv {
+            set min_threads [dget $conf min_threads]
+            set threads [tsv::get tsv freeThreads]
+            log $sock "threads: $threads"
+            if {[llength $threads] <= $min_threads} {
+                log $sock "only [llength $threads] <= $min_threads"
+                return
+            }
+
+            set max_life [dget $conf max_life]
+            set now [clock milliseconds]
+
+            set threads [lsort  -index 1 $threads]
+            set newest  [lrange $threads $min_threads+1 end]
+            set oldest  [lrange $threads 0 $min_threads]
+
+            log $sock "cleaning up $oldest"
+            set keep [lmap elem $oldest {
+                lassign $elem tid ttime
+                if {[expr {$now - $ttime > $max_life}]} {
+                    thread::release $tid
+                    continue
+                }
+                set elem
+            }]
+            incr nofThreads [expr {[llength $keep] - [llength $oldest]}]
+            log $sock "cleaned up $keep"
+            tsv::set tsv freeThreads [concat $keep $newest]
+        }
     }
 
     ##
@@ -93,6 +130,8 @@ namespace eval server {
         # Initialize with default values
         set conf {
             max_threads  50
+            min_threads  1
+            max_life_ms  60000
             script_path  {}
             timeout      -1
             addr         127.0.0.1
@@ -109,6 +148,18 @@ namespace eval server {
                 -m -
                 --max-threads {
                     dset conf max_threads [lindex $::argv [incr i]]
+                }
+                -i -
+                --min-threads {
+                    dset conf min_threads [lindex $::argv [incr i]]
+                }
+                -l -
+                --max-life {
+                    set t [lindex $::argv [incr i]]
+                    if {![string is entier $t]} {
+                        error "max-life must be an integer: $t given."
+                    }
+                    dset conf max_life [expr {$t * 1000}]
                 }
                 -p -
                 --port {
@@ -313,6 +364,8 @@ namespace eval server {
 
         # Get a free thread. This call might wait if max_threads was reached.
         set tid [get_thread]
+
+        log $sock "got thread $tid"
         
         # Set up and invoke the worker thread by transferring the client socket
         # to the thread and setting up the necessary state data.
@@ -330,12 +383,16 @@ namespace eval server {
             ::scgi::handle
             ::scgi::flush
 
-            tsv::lappend tsv freeThreads [thread::id]
+            tsv::lappend tsv freeThreads [list [thread::id] [clock milliseconds]]
             thread::cond notify [tsv::get tsv cond]
         }
 
         # Cleanup this connection's state in the master thread. The worker
         # thread is going to handle it from now on.
         cleanup $sock
+
+        # Kill old free threads
+        cleanup_threads $sock
+
     }
 }
