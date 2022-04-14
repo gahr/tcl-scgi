@@ -54,6 +54,15 @@ namespace eval server {
         variable conf
         variable nofThreads
 
+        # if there's a free thread available, pick it
+        tsv::lock tsv {
+            set tid [tsv::lindex tsv freeThreads end]
+            if {$tid ne {}} {
+                tsv::lpop tsv freeThreads end
+                return $tid
+            }
+        }
+
         # create a new thread
         if {$nofThreads < [dget $conf max_threads]} {
             set tid [thread::create]
