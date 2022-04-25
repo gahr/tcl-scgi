@@ -329,6 +329,7 @@ set worker {
             set int [make_interp $script $params]
             set ::errorInfo {}
             run $script $int
+            interp delete $int
         }
 
         # Parse url-encoded parameters
