@@ -7,7 +7,7 @@ namespace eval server {
 
     ##
     # Configuration options
-    variable conf {}
+    variable params
 
     ##
     # Thread pool -related variables. We don't use tpool because we don't have
@@ -37,11 +37,11 @@ namespace eval server {
     variable cdata {}
 
     # if needed, fork and print child pid
-    proc fork {} {
-        set fork [lsearch -exact $::argv -f]
-        if {$fork != -1} {
-            set args [lreplace $::argv $fork $fork]
-            set child [open "|[info nameofexecutable] [file normalize [info script]] $args" r]
+    proc fork {argv} {
+        variable params
+        if {$params(fork) && !$params(forked)} {
+            lappend argv --forked
+            set child [open "|[info nameofexecutable] [file normalize [info script]] $argv" r]
             puts [pid $child]
             exit 0
         }
@@ -51,7 +51,7 @@ namespace eval server {
     # Get a free thread by creating up to max_threads. If none is available,
     # wait until one is fed back to the free threads list.
     proc get_thread {} {
-        variable conf
+        variable params 
         variable nofThreads
 
         # if there's a free thread available, pick it
@@ -64,7 +64,7 @@ namespace eval server {
         }
 
         # create a new thread
-        if {$nofThreads < [dget $conf max_threads]} {
+        if {$nofThreads < $params(max_threads)} {
             set tid [thread::create]
             thread::preserve $tid
             incr nofThreads
@@ -88,11 +88,11 @@ namespace eval server {
     ##
     # Cleanup free threads that have been sleeping for long
     proc cleanup_threads {sock} {
-        variable conf
+        variable params
         variable nofThreads
 
         tsv::lock tsv {
-            set min_threads [dget $conf min_threads]
+            set min_threads $params(min_threads)
             set threads [tsv::get tsv freeThreads]
             log $sock "threads: $threads"
             if {[llength $threads] <= $min_threads} {
@@ -100,8 +100,7 @@ namespace eval server {
                 return
             }
 
-            set max_life [dget $conf max_life]
-            set now [clock milliseconds]
+            set now [clock seconds]
 
             set threads [lsort  -index 1 $threads]
             set newest  [lrange $threads $min_threads+1 end]
@@ -110,7 +109,7 @@ namespace eval server {
             log $sock "cleaning up $oldest"
             set keep [lmap elem $oldest {
                 lassign $elem tid ttime
-                if {[expr {$now - $ttime > $max_life}]} {
+                if {[expr {$now - $ttime > $params(thread_keepalive)}]} {
                     thread::release $tid
                     continue
                 }
@@ -125,88 +124,47 @@ namespace eval server {
     ##
     # Parse command line arguments.
     proc parse_args {} {
-        variable conf
+        variable params
 
-        # Initialize with default values
-        set conf {
-            max_threads  50
-            min_threads  1
-            max_life_ms  60000
-            script_path  {}
-            timeout      -1
-            addr         127.0.0.1
-            port         4000
-            verbose      false
+        set options {
+            {addr.arg 127.0.0.1       {Listen on the specified address}}
+            {port.arg 4000            {Listen on the specified port}}
+            {path.arg {DOCUMENT_ROOT} {Script path}}
+            {fork                     {Fork and return the pid of the child process}}
+            {forked.secret            {Set after a fork}}
+            {max_threads.arg 50       {Maximum number of threads to spawn}}
+            {min_threads.arg 1        {Minimum number of threads to spawn}}
+            {thread_keepalive.arg 60  {Number of seconds an idle thread is kept alive}}
+            {conn_keepalive.arg -1    {Number of seconds an idle connection is kept alive}}
+            {verbose                  {Dump verbose information to stdout}}
+        }
+        
+        set usage {: <$::argv>:scgi.tcl [option...]:}
+        try {
+            array set params [::cmdline::getoptions ::argv $options $usage]
+        } trap {CMDLINE USAGE} {msg o} {
+            puts $msg
+            exit 0
         }
 
-        for {set i 0} {$i < $::argc} {incr i} {
-            switch [lindex $::argv $i] {
-                -a -
-                --addr {
-                    dset conf addr [lindex $::argv [incr i]]
-                }
-                -m -
-                --max-threads {
-                    dset conf max_threads [lindex $::argv [incr i]]
-                }
-                -i -
-                --min-threads {
-                    dset conf min_threads [lindex $::argv [incr i]]
-                }
-                -l -
-                --max-life {
-                    set t [lindex $::argv [incr i]]
-                    if {![string is entier $t]} {
-                        error "max-life must be an integer: $t given."
-                    }
-                    dset conf max_life [expr {$t * 1000}]
-                }
-                -p -
-                --port {
-                    dset conf port [lindex $::argv [incr i]]
-                }
-                -s -
-                --script-path {
-                    dset conf script_path [lindex $::argv [incr i]]
-                }
-                -t -
-                --timeout {
-                    set t [lindex $::argv [incr i]]
-                    if {![string is entier $t]} {
-                        error "timeout must be an integer: $t given."
-                    }
-                    dset conf timeout [expr {$t * 1000}]
-                }
-                -v -
-                --verbose {
-                    dset conf verbose true
-                }
-                -version {
-                    puts "This is tcl-scgi [join $::version .]"
-                    exit 0
-                }
-                default {
-                    error "Unhandled argument: [lindex $::argv $i]"
-                }
-            }
+        if {$params(path) eq {DOCUMENT_ROOT}} {
+            array set params {path {}}
         }
     }
 
     proc log {sock msg} {
-        variable conf
+        variable params
 
-        if {![dget $conf verbose]} {
-            return
+        if {$params(verbose)} {
+            ::puts "[clock format [clock seconds]]: $sock - $msg"
         }
-
-        ::puts "[clock format [clock seconds]]: $sock - $msg"
     }
 
     ##
     # Create server socket.
     proc serve {} {
-        variable conf
-        socket -server [namespace code handle_connect] -myaddr [dget $conf addr] [dget $conf port]
+        variable params
+        socket -server [namespace code handle_connect] -myaddr $params(addr) $params(port)
     }
 
     ##
@@ -227,16 +185,16 @@ namespace eval server {
     # Reschedule the timeout for a connection.
     proc schedule_timeout {sock} {
         variable cdata
-        variable conf
+        variable params
 
-        set t [dget $conf timeout]
+        set t $params(conn_keepalive)
 
         if {$t == -1} {
             return
         }
 
         after cancel [dget? $cdata $sock:afterid]
-        dset cdata $sock:afterid [after $t [namespace code [list hangup $sock]]]
+        dset cdata $sock:afterid [after [expr {$t * 1000}] [namespace code [list hangup $sock]]]
     }
 
     ##
@@ -280,6 +238,7 @@ namespace eval server {
         dapp cdata $sock:data [read $sock]
         if {[chan eof $sock]} {
             cleanup $sock
+            return
         }
 
         # Reschedule the timeout.
@@ -353,7 +312,7 @@ namespace eval server {
     # Handle a request on a different thread.
     proc handle_request {sock} {
         variable cdata
-        variable conf
+        variable params
 
         log $sock handle_request
 
@@ -375,7 +334,7 @@ namespace eval server {
         thread::send $tid $::worker
 
         thread::send $tid [list set sock $sock]
-        thread::send $tid [list set conf $conf]
+        thread::send $tid [list set script_path $params(path)]
         thread::send $tid [list set head [dget $cdata $sock:head]]
         thread::send $tid [list set body [string range [dget $cdata $sock:data] [expr {[dget $cdata $sock:bbeg] - 1}] [expr {[dget $cdata $sock:bbeg] -1 + [dget $cdata $sock:blen]}]]]
 
@@ -383,7 +342,7 @@ namespace eval server {
             ::scgi::handle
             ::scgi::flush
 
-            tsv::lappend tsv freeThreads [list [thread::id] [clock milliseconds]]
+            tsv::lappend tsv freeThreads [list [thread::id] [clock seconds]]
             thread::cond notify [tsv::get tsv cond]
         }
 

@@ -40,6 +40,7 @@ set version [list 0 1 0]
 
 package require Tcl @@TCLVERSION@@
 package require Thread 2.7
+package require cmdline
 
 @dhelpers.tcl@
 @worker.tcl@

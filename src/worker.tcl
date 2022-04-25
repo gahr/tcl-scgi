@@ -112,7 +112,7 @@ set worker {
             # - SCRIPT_NAME
             # - PATH_INFO
             # - index.tcl
-            set script [dget? $::conf script_path]
+            set script $::script_path
             if {$script eq {}} {
                 set script $droot
             }

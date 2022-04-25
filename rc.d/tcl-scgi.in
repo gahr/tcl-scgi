@@ -9,7 +9,7 @@
 # tcl_scgi_enable="YES"
 # 
 # Additionally, startup flags might be defined as follows:
-# tcl_scgi_flags="-a 127.0.0.1 -p 9100"
+# tcl_scgi_flags="-addr 127.0.0.1 -port 9100"
 #
 # To run the server under a different user, define the following:
 # tcl_scgi_user="www"
@@ -37,7 +37,7 @@ stop_cmd="tcl_scgi_stop"
 tcl_scgi_start()
 {
     check_startmsgs && echo -n "Starting $name"
-    pid=$(su -m $tcl_scgi_user -c "$command $tcl_scgi_flags -f")
+    pid=$(su -m $tcl_scgi_user -c "$command $tcl_scgi_flags -fork")
     if [ $? -ne 0 ]; then
         return 1
     fi
