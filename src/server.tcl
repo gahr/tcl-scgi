@@ -10,12 +10,8 @@ namespace eval server {
     variable params
 
     ##
-    # Thread pool -related variables. We don't use tpool because we don't have
-    # a way to pass channels when posting a job into a tpool instance.
-    variable nofThreads  0
-    tsv::set tsv freeThreads [list]
-    tsv::set tsv mutex [thread::mutex create]
-    tsv::set tsv cond [thread::cond create]
+    # Thread pool
+    variable tp
 
     ##
     # Data of each connection is kept in this dictionary. Each key is
@@ -48,83 +44,10 @@ namespace eval server {
     }
 
     ##
-    # Get a free thread by creating up to max_threads. If none is available,
-    # wait until one is fed back to the free threads list.
-    proc get_thread {} {
-        variable params 
-        variable nofThreads
-
-        # if there's a free thread available, pick it
-        tsv::lock tsv {
-            lassign [tsv::lindex tsv freeThreads end] tid ttime
-            if {$tid ne {}} {
-                tsv::lpop tsv freeThreads end
-                return $tid
-            }
-        }
-
-        # create a new thread
-        if {$nofThreads < $params(max_threads)} {
-            set tid [thread::create]
-            thread::preserve $tid
-            incr nofThreads
-            return $tid
-        }
-
-        # if there's no free threads, wait
-        thread::mutex lock [tsv::get tsv mutex]
-        while {[tsv::llength tsv freeThreads] == 0} {
-            thread::cond wait [tsv::get tsv cond] [tsv::get tsv mutex]
-        }
-        thread::mutex unlock [tsv::get tsv mutex]
-        tsv::lock tsv {
-            lassign [tsv::lindex tsv freeThreads end] tid ttime
-            tsv::lpop tsv freeThreads end
-        }
-
-        return $tid
-    }
-
-    ##
-    # Cleanup free threads that have been sleeping for long
-    proc cleanup_threads {sock} {
-        variable params
-        variable nofThreads
-
-        tsv::lock tsv {
-            set min_threads $params(min_threads)
-            set threads [tsv::get tsv freeThreads]
-            log $sock "threads: $threads"
-            if {[llength $threads] <= $min_threads} {
-                log $sock "only [llength $threads] <= $min_threads"
-                return
-            }
-
-            set now [clock seconds]
-
-            set threads [lsort  -index 1 $threads]
-            set newest  [lrange $threads $min_threads+1 end]
-            set oldest  [lrange $threads 0 $min_threads]
-
-            log $sock "cleaning up $oldest"
-            set keep [lmap elem $oldest {
-                lassign $elem tid ttime
-                if {[expr {$now - $ttime > $params(thread_keepalive)}]} {
-                    thread::release $tid
-                    continue
-                }
-                set elem
-            }]
-            incr nofThreads [expr {[llength $keep] - [llength $oldest]}]
-            log $sock "cleaned up $keep"
-            tsv::set tsv freeThreads [concat $keep $newest]
-        }
-    }
-
-    ##
     # Parse command line arguments.
     proc parse_args {} {
         variable params
+        variable tp
 
         set options {
             {addr.arg 127.0.0.1       {Listen on the specified address}}
@@ -150,6 +73,11 @@ namespace eval server {
         if {$params(path) eq {DOCUMENT_ROOT}} {
             array set params {path {}}
         }
+
+        set tp [tpool::create \
+            -minworkers $params(min_threads) \
+            -maxworkers $params(max_threads) \
+            -idletime $params(thread_keepalive)]
     }
 
     proc log {sock msg} {
@@ -308,9 +236,27 @@ namespace eval server {
         }
     }
 
+    proc make_worker_script {sock} {
+        variable params
+        variable cdata
+
+        set head [dget $cdata $sock:head]
+        set body_fst [expr {[dget $cdata $sock:bbeg] - 1}]
+        set body_lst [expr {$body_fst + [dget $cdata $sock:blen]}]
+        set body [string range [dget $cdata $sock:data] $body_fst $body_lst]
+        list apply {{dhelpers worker path sock head body} {
+            eval $dhelpers
+            eval $worker
+            set ::script_path $path
+            thread::attach $sock
+            ::scgi::handle $sock $head $body
+        }} $::dhelpers $::worker $params(path) $sock $head $body
+    }
+
     ##
     # Handle a request on a different thread.
     proc handle_request {sock} {
+        variable tp
         variable cdata
         variable params
 
@@ -321,37 +267,14 @@ namespace eval server {
         chan event $sock r {}
         after cancel [dget? $cdata $sock:afterid]
 
-        # Get a free thread. This call might wait if max_threads was reached.
-        set tid [get_thread]
+        # Detach the client socket from this thread, the worker script will
+        # attach it to the worker thread.
+        thread::detach $sock
+        tpool::post -detached $tp [make_worker_script $sock]
 
-        log $sock "got thread $tid"
-        
-        # Set up and invoke the worker thread by transferring the client socket
-        # to the thread and setting up the necessary state data.
-        thread::transfer $tid $sock
-
-        thread::send $tid $::dhelpers
-        thread::send $tid $::worker
-
-        thread::send $tid [list set sock $sock]
-        thread::send $tid [list set script_path $params(path)]
-        thread::send $tid [list set head [dget $cdata $sock:head]]
-        thread::send $tid [list set body [string range [dget $cdata $sock:data] [expr {[dget $cdata $sock:bbeg] - 1}] [expr {[dget $cdata $sock:bbeg] -1 + [dget $cdata $sock:blen]}]]]
-
-        thread::send -async $tid {
-            ::scgi::handle
-            ::scgi::flush
-
-            tsv::lappend tsv freeThreads [list [thread::id] [clock seconds]]
-            thread::cond notify [tsv::get tsv cond]
-        }
-
-        # Cleanup this connection's state in the master thread. The worker
-        # thread is going to handle it from now on.
+        # Cleanup the connection state in the server. It is now handled by the
+        # worker thread
         cleanup $sock
-
-        # Kill old free threads
-        cleanup_threads $sock
 
     }
 }

@@ -81,9 +81,9 @@ set worker {
     namespace eval scgi {
 
         variable has_ncgi [expr {[catch {package require ncgi}] == 0}]
-        variable out_head {}
-        variable out_body {}
-        variable flushed  0
+        variable out_head
+        variable out_body
+        variable flushed
 
         ##
         # Quit with an error
@@ -153,6 +153,7 @@ set worker {
             $int eval chan close stderr
 
             # Setup aliases in the ::scgi::namespace
+            interp alias $int log              {} ::puts
             interp alias $int @                {} ::scgi::puts
             interp alias $int ::scgi::header   {} ::scgi::header
             interp alias $int ::scgi::flush    {} ::scgi::flush
@@ -296,8 +297,21 @@ set worker {
 
         ##
         # Handle the request
-        proc handle {} {
+        proc handle {sock head body} {
             variable has_ncgi
+            variable out_head
+            variable out_body
+            variable flushed
+
+            #
+            # Initialize the state for this request
+            set out_head {}
+            set out_body {}
+            set flushed  0
+
+            set ::sock $sock
+            set ::head $head
+            set ::body $body
 
             #
             # Build the params dictionary, composed of the query string and
@@ -329,6 +343,7 @@ set worker {
             set int [make_interp $script $params]
             set ::errorInfo {}
             run $script $int
+            flush
             interp delete $int
         }
 
