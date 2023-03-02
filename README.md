@@ -5,7 +5,7 @@ This is a Simple Common Gateway Interface (SCGI) handler implemented as a multi-
 Each request is first parsed by the main thread then dispatched to be served by a dedicated thread.
 The scgi.tcl software requires Tcl 8.6 and the Thread extension.
 
-The result of the following example can be seen <a href="https://www.ptrcrt.ch/example.stcl">here</a>.
+The result of the following example can be seen <a href="https://ptrcrt.ch/example.stcl">here</a>.
 
     <?xml version="1.0" encoding="utf-8"?>
     <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
