@@ -1,9 +1,9 @@
 # vim: set ts=4:
 
-TCLSH?=		tclsh8.7
+TCLSH?=		tclsh9.0
 REPO=		fossil info | grep ^repository | awk '{print $$2}'
 SRCS=		src/dhelpers.tcl src/run.tcl src/server.tcl src/worker.tcl
-OUT=		scgi.tcl rc.d/tcl-scgi
+OUT=		scgi.tcl rc.d/tcl-scgi scgi.exe
 TCLSHEXE!=	echo 'puts [info nameofexecutable]' | ${TCLSH}
 TCLVERSION!=echo 'puts [info tclversion]' | ${TCLSH}
 SUBST=		"s|@@TCLSHEXE@@|${TCLSHEXE}|g; s|@@TCLVERSION@@|${TCLVERSION}|g"
@@ -31,3 +31,5 @@ git:
 	git push -f origin master && \
 	cd .. && rm -rf git-import
 
+scgi.exe: scgi.tcl
+	echo "zipfs lmkimg $@ {scgi.tcl main.tcl}" | ${TCLSH}
