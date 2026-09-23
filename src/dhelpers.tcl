@@ -4,11 +4,11 @@
 set dhelpers {
 
     proc ::tcl::dict::get? {args} {
-        if {[info tclversion] >= "9.0"} {
+        if {[::info tclversion] >= "9.0"} {
             dict getdef {*}$args {}
         } else {
-            set d [lindex $args 0]
-            set args [lrange $args 1 end]
+            ::set d [lindex $args 0]
+            ::set args [lrange $args 1 end]
             if {[dict exists $d $args]} {
                 dict get $d $args
             } else {
