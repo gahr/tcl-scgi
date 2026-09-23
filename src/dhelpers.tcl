@@ -4,7 +4,7 @@
 set dhelpers {
 
     proc ::tcl::dict::get? {args} {
-        if {[info version] >= "9.0"} {
+        if {[info tclversion] >= "9.0"} {
             dict getdef {*}$args {}
         } else {
             set d [lindex $args 0]
