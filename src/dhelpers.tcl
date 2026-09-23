@@ -9,8 +9,8 @@ set dhelpers {
         } else {
             ::set d [lindex $args 0]
             ::set args [lrange $args 1 end]
-            if {[dict exists $d $args]} {
-                dict get $d $args
+            if {[dict exists $d {*}$args]} {
+                dict get $d {*}$args
             } else {
                 return {}
             }
