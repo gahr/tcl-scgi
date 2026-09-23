@@ -5,7 +5,7 @@ This is a Simple Common Gateway Interface (SCGI) handler implemented as a multi-
 Each request is first parsed by the main thread then dispatched to be served by a dedicated thread.
 The scgi.tcl software requires Tcl 8.6 and the Thread extension.
 
-The result of the following example can be seen <a href="https://ptrcrt.ch/example.stcl">here</a>.
+The result of the following example can be seen <a href="https://gahr.ch/example.stcl">here</a>.
 
     <?xml version="1.0" encoding="utf-8"?>
     <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
@@ -19,7 +19,7 @@ The result of the following example can be seen <a href="https://ptrcrt.ch/examp
             <?
                 set lvl 0
                 while {$lvl <= 255} {
-                    set color "#[string range [format %02X $lvl] 3]"
+                    set color "#[string repeat [format %02X $lvl] 3]"
                     @ [::scgi::html::td \
                         [list style "background-color: $color; width: 20px; height: 20px" \
                               title $color] \
